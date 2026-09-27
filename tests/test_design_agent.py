@@ -868,6 +868,107 @@ def test_real_adapter_contract_passes_all_images_not_only_prompt(env, monkeypatc
     assert requests[0]["response_format"] == "b64_json"
 
 
+def _generation_provider(monkeypatch, calls):
+    import httpx
+
+    provider = Provider()
+    provider.enabled, provider.image_verified = True, True
+    provider.vision_url = "https://example.invalid/v1"
+    provider.vision_model, provider.vision_key = "test-model", "not-a-real-key"
+    provider.image_url = "https://image.example.test/v1"
+    provider.image_key, provider.image_model = "not-a-real-key", "test-image-model"
+    provider.reasoning_fen, provider.image_fen, provider.monthly_fen = 1, 10, 100
+    original = httpx.Client
+
+    def handler(request):
+        import base64
+
+        calls.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(png()).decode()}]})
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs))
+    return provider
+
+
+def test_image_reference_format_setting(env, monkeypatch):
+    monkeypatch.delenv("IMAGE_REFERENCE_FORMAT", raising=False)
+    config.get_config.cache_clear()
+    assert config.get_config().image_reference_format == "list"
+    assert Provider().image_reference_format == "list"
+
+    monkeypatch.setenv("IMAGE_REFERENCE_FORMAT", " SINGLE ")
+    config.get_config.cache_clear()
+    assert config.get_config().image_reference_format == "single"
+    assert Provider().image_reference_format == "single"
+
+    monkeypatch.setenv("IMAGE_REFERENCE_FORMAT", "array")
+    config.get_config.cache_clear()
+    assert config.get_config().image_reference_format == "list"
+
+
+def test_render_list_format_posts_reference_images_as_array(env, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.delenv("IMAGE_REFERENCE_FORMAT", raising=False)
+    config.get_config.cache_clear()
+    calls = []
+    provider = _generation_provider(monkeypatch, calls)
+    refs = [
+        ("asset_id=fabric; role=fabric; region=整体; 面料", save_image(png("green"))),
+        ("base_version_id=design-1; 修改底图", save_image(png("blue"))),
+    ]
+    with caplog.at_level(logging.INFO):
+        assert provider.render({"intent": "test"}, refs, None) == png()
+    assert str(calls[0].url) == "https://image.example.test/v1/images/generations"
+    body = json.loads(calls[0].content)
+    assert body["image"] == [data_url(refs[0][1]), data_url(refs[1][1])]
+    assert body["sequential_image_generation"] == "disabled"
+    assert body["response_format"] == "b64_json"
+    assert body["watermark"] is True
+    assert body["stream"] is False
+    assert "已忽略其余" not in caplog.text
+
+
+def test_render_single_format_posts_primary_reference_as_string(env, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("IMAGE_REFERENCE_FORMAT", "single")
+    config.get_config.cache_clear()
+    calls = []
+    provider = _generation_provider(monkeypatch, calls)
+    user = ("asset_id=fabric; role=fabric; region=整体; 面料", save_image(png("green")))
+    detail = ("asset_id=detail; role=detail; region=领口; 领口", save_image(png("white")))
+    base = ("base_version_id=design-1; 修改底图", save_image(png("blue")))
+    current = ("current_version_id=design-2; 本轮修正底图", save_image(png("red")))
+    caplog.set_level(logging.INFO)
+
+    assert provider.render({"intent": "edit"}, [user, base, detail, current], None) == png()
+    body = json.loads(calls[0].content)
+    assert str(calls[0].url) == "https://image.example.test/v1/images/generations"
+    assert body["image"] == data_url(current[1])
+    assert body["sequential_image_generation"] == "disabled"
+    assert body["watermark"] is True
+    assert body["stream"] is False
+    assert body["response_format"] == "b64_json"
+    assert "已忽略其余 3 张参考图" in caplog.text
+
+    caplog.clear()
+    provider.render({"intent": "edit"}, [user, detail, base], None)
+    assert json.loads(calls[1].content)["image"] == data_url(base[1])
+    assert "已忽略其余 2 张参考图" in caplog.text
+
+    caplog.clear()
+    plain = [("structure", save_image(png())), ("fabric", save_image(png("green")))]
+    provider.render({"intent": "new"}, plain, None)
+    assert json.loads(calls[2].content)["image"] == data_url(plain[0][1])
+    assert "已忽略其余 1 张参考图" in caplog.text
+
+    caplog.clear()
+    provider.render({"intent": "new"}, [plain[0]], None)
+    assert json.loads(calls[3].content)["image"] == data_url(plain[0][1])
+    assert "已忽略其余" not in caplog.text
+
+
 def test_visual_correction_preserves_machine_review_but_physical_is_blocked(env):
     from app.agent.schemas import CorrectionIn
 

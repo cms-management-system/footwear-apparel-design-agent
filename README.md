@@ -21,7 +21,17 @@ npm run dev
 
 打开 [http://localhost:5180/](http://localhost:5180/)。后端健康检查为 `GET /api/health`。如果采用生产模式运行前端，修改代码后须重新 `npm run build` 并重启 `npm run start`。
 
-把 `.env.example` 复制为 `.env`。CMS 相关项只放在后端：
+把 `.env.example` 复制为 `.env`。出图默认走火山方舟；若中转接口拒绝参考图数组，把 `IMAGE_REFERENCE_FORMAT` 设为 `single`。
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `IMAGE_API_KEY` | 空 | 出图密钥，只留在后端 |
+| `IMAGE_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | 出图接口根地址 |
+| `IMAGE_MODEL` | 空 | 图像模型 ID |
+| `IMAGE_SIZE` | `2K` | 出图尺寸。方舟 seedream 5.0 要求至少 3,686,400 像素 |
+| `IMAGE_REFERENCE_FORMAT` | `list` | `list` 把参考图作为 JSON 数组发送；`single` 只发送最相关的一张字符串（正在修改的图或当前选定设计优先，否则第一张用户参考图） |
+
+CMS 相关项只放在后端：
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
