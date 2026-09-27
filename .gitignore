@@ -1,0 +1,24 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Python and Node build artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Runtime data and generated outputs
+data/*.sqlite3*
+data/assets/
+data/exports/
+*.log
+*.pid
+
+# Editor and OS files
+.DS_Store
