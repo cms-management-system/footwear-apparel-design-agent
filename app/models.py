@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from sqlalchemy import String, create_engine
+from sqlalchemy import String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .config import ROOT, get_config
@@ -27,6 +27,9 @@ class Project(Base):
     category: Mapped[str] = mapped_column(String(40), default="连衣裙")
     status: Mapped[str] = mapped_column(String(40), default="draft")
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
+    cms_package_id: Mapped[str | None] = mapped_column(String(80), nullable=True, default=None)
+    cms_package_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    cms_responses: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
 
 _engine = None

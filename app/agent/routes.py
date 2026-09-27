@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy import select
 
 from ..models import Project
-from . import assets, chat, events, models3d, sample_pack, service, style, technical_flat
+from . import assets, chat, cms, events, models3d, sample_pack, service, style, technical_flat
 from .providers import Provider
 from .schemas import ChatIn, CorrectionIn, FeedbackIn, RevisionIn, SamplingSheetIn, SpecIn, StylePlanEdit, TaskIn
 from .store import AgentError, Record, create, head, records, require, serialize, transaction
@@ -37,6 +37,16 @@ class AgentRoute(APIRoute):
 
 
 router = APIRouter(prefix="/api", tags=["design-agent"], route_class=AgentRoute)
+
+
+@router.get("/cms/packages/{package_id}")
+def cms_package(package_id: str) -> dict:
+    return cms.fetch_package(package_id)
+
+
+@router.post("/projects/{pid}/cms-response")
+def cms_response(pid: int, data: cms.CmsResponseIn) -> dict:
+    return cms.submit_response(pid, data)
 
 
 @router.get("/design-agent/capabilities")
