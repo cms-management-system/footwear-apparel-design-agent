@@ -40,6 +40,10 @@ npm run dev
 
 旧“五道门”工作台、示例库和静态验收页已从运行代码中移除。
 
+## 产品文档
+
+- [鞋服智能设计 Agent PRD](<docs/PRD/鞋服设计agent PRD/PRD-鞋服智能设计Agent.md>)
+
 ## 验证
 
 ```bash
