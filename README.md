@@ -21,6 +21,24 @@ npm run dev
 
 打开 [http://localhost:5180/](http://localhost:5180/)。后端健康检查为 `GET /api/health`。如果采用生产模式运行前端，修改代码后须重新 `npm run build` 并重启 `npm run start`。
 
+把 `.env.example` 复制为 `.env`。CMS 相关项只放在后端：
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `CMS_BASE_URL` | `http://127.0.0.1:8001` | CMS 根地址 |
+| `CMS_API_KEY` | 空 | 设计 Agent 的 CMS 密钥，请求头 `X-API-Key`，不会下发到前端 |
+| `CMS_TIMEOUT` | `10` | 调用 CMS 的超时秒数 |
+| `PUBLIC_BASE_URL` | `http://127.0.0.1:8020` | 拼回传图片的绝对地址 |
+
+前端跳转写在 `frontend/.env.local`（可从 `frontend/.env.example` 复制）：
+
+| 变量 | 本地默认 |
+| --- | --- |
+| `NEXT_PUBLIC_LINK_OUTFIT` | `http://localhost:3010` |
+| `NEXT_PUBLIC_LINK_PRODUCT` | `http://localhost:3000` |
+| `NEXT_PUBLIC_LINK_DESIGN` | `http://localhost:5180` |
+| `NEXT_PUBLIC_LINK_CMS` | `http://localhost:8001` |
+
 ## 当前主流程
 
 1. 对话描述款式，可上传草图、面料照片或参考图；助手整理设计要求。
@@ -29,6 +47,21 @@ npm run dev
 4. 确认一款后进入方案页，查看设计依据并下载图片与打样沟通资料。未确定的尺寸、面料和工艺会标明待核对，示意结构图不能直接当纸样使用。
 
 顶部“历史对话”可打开现有项目。旧 `/workbench` 地址会转到当前入口。
+
+## 和 CMS 一起演示
+
+链路是：穿搭信号进入 CMS → 产品 Agent 形成证据包 → 负责人在 CMS 批准 → 本设计 Agent 读取已批准的包并出图 → 把设计回写成草稿 → 负责人在 CMS 入档。CMS 页面上应能看到信号、证据包、设计这三段。
+
+1. 启动 CMS（默认 `http://127.0.0.1:8001`），把设计 Agent 的 API Key 写入本仓库 `.env` 的 `CMS_API_KEY`。
+2. 在 CMS 中准备一条证据包，并由产品负责人把状态批成 `approved`。未批准时导入会提示“尚未批准”。
+3. 按上面的命令启动本仓库后端 `:8020` 和前端 `:5180`。
+4. 打开 [http://localhost:5180/](http://localhost:5180/)，在新对话里点「从 CMS 导入证据包」，输入包编号并读取。卡片会显示需求描述、约束、关联信号数和版本；原始 JSON 在折叠块里。
+5. 点「用这个需求开始设计」。需求会作为第一条消息进入现有的整理要求流程，项目上会出现证据包编号。
+6. 按主流程确认要求、规划方向、生成并确认一款，打开方案页。
+7. 在方案页选择回传状态（采纳 / 不采纳 / 需补证），核对可编辑的设计说明，确认写入 CMS。成功后显示 `DSG-YYYYMMDD-` 设计编号，状态为 `draft`（待产品负责人入档）。同一设计再次提交使用同一个编号，不会在 CMS 里重复建档。
+8. 回到 CMS，由产品负责人把这条设计草稿入档。
+
+本服务对外的接口是 `GET /api/cms/packages/{package_id}` 和 `POST /api/projects/{id}/cms-response`。前端只调用这两个地址，不接触 CMS 密钥。
 
 ## 代码与数据
 

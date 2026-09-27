@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from .agent import cms
 from .agent.migrate import migrate
 from .agent.routes import router as design_agent_router
 from .agent.runner import worker
+from .agent.store import AgentError
 from .models import Project, init_db, session
 
 app = FastAPI(title="款式工场 · 鞋服智能设计 Agent", version="1.0.0")
@@ -43,12 +47,29 @@ def health() -> dict[str, bool]:
 
 class ProjectIn(BaseModel):
     name: str = "未命名项目"
+    cms_package_id: str | None = None
 
 
 @app.post("/api/project")
-def create_project(payload: ProjectIn) -> dict[str, int | str]:
-    with session() as db:
-        project = Project(name=payload.name)
-        db.add(project)
-        db.commit()
-        return {"id": project.id, "name": project.name, "status": project.status}
+def create_project(payload: ProjectIn):
+    package_id = (payload.cms_package_id or "").strip() or None
+    snapshot = None
+    try:
+        if package_id:
+            snapshot = cms.fetch_package(package_id)
+        with session() as db:
+            project = Project(
+                name=payload.name,
+                cms_package_id=package_id,
+                cms_package_snapshot=json.dumps(snapshot, ensure_ascii=False) if snapshot else None,
+            )
+            db.add(project)
+            db.commit()
+            return {
+                "id": project.id,
+                "name": project.name,
+                "status": project.status,
+                "cms_package_id": project.cms_package_id,
+            }
+    except AgentError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": {"code": exc.code, "message": exc.message}})

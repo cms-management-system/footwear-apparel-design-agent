@@ -4,6 +4,7 @@ import { agentApi, activeTask, type Capabilities, type Reference, type StyleDire
 import DesignAgentPanel from "./DesignAgentPanel";
 import VersionActions from "./VersionActions";
 import Model3DPanel from "./Model3DPanel";
+import CmsImport from "./CmsImport";
 import DesignStart, { type StartInput } from "./DesignStart";
 import StylePlanPanel from "./StylePlanPanel";
 import styles from "./design.module.css";
@@ -139,7 +140,7 @@ export default function DesignChat() {
     if (busy || working || detailsDirty || detailsBusy || versionDirty || planDirty) return;
     setBusy(true); setError("");
     try {
-      if (!pending.current) pending.current = { pid: pid ?? (await agentApi.create(input.intent.slice(0, 40))).id, uploads: {} };
+      if (!pending.current) pending.current = { pid: pid ?? (await agentApi.create(input.intent.slice(0, 40), input.cmsPackageId)).id, uploads: {} };
       const attempt = pending.current;
       const references: Reference[] = [];
       for (const asset of input.assets) {
@@ -247,7 +248,9 @@ export default function DesignChat() {
 
   return <main className={`${styles.studio} ${styles.chat}`}>
     <div className={styles.chatHeading}>
-      <div><span className={styles.eyebrow}>设计共创</span><h1>{pid ? workspace?.project.name ?? "继续你的设计" : "从一个想法开始"}</h1></div>
+      <div><span className={styles.eyebrow}>设计共创</span><h1>{pid ? workspace?.project.name ?? "继续你的设计" : "从一个想法开始"}</h1>
+        {workspace?.project.cms?.package_id && <p className={styles.packageChip}>已关联证据包 <span className={styles.mono}>{workspace.project.cms.package_id}</span></p>}
+      </div>
       <div className={styles.chatTools}>
         {pid && confirmedVersions.length > 0 && <details className={styles.confirmedPicker}>
           <summary>已确认 {confirmedVersions.length} 款</summary>
@@ -268,7 +271,9 @@ export default function DesignChat() {
     {pid && !workspace && <p role="status">正在恢复对话…</p>}
     <div className={styles.chatBody}>
     <section className={styles.conversation} aria-label="设计对话">
-      {!pid && <div className={styles.chatWelcome}><span className={styles.eyebrow}>一起，把想法变成衣服</span><h2>一张草图，一块面料，<br />或者一个还没成形的想法。</h2><p>告诉我你想做什么，我们边聊边推敲。</p><div className={styles.welcomeHints}><span>探索款式</span><span>推敲草图</span><span>尝试面料与配色</span></div></div>}
+      {!pid && <div className={styles.chatWelcome}><span className={styles.eyebrow}>一起，把想法变成衣服</span><h2>一张草图，一块面料，<br />或者一个还没成形的想法。</h2><p>告诉我你想做什么，我们边聊边推敲。</p><div className={styles.welcomeHints}><span>探索款式</span><span>推敲草图</span><span>尝试面料与配色</span></div>
+        <CmsImport busy={busy || !caps} onUse={(prompt, packageId) => void send({ intent: prompt, assets: [], authorized: !!caps?.understand, cmsPackageId: packageId })} />
+      </div>}
       {workspace && !messages.length && current && <article className={styles.userMessage}><small>已有设计要求</small><p>{current.spec.intent}</p></article>}
       {messages.map(m => <article key={m.id} className={m.role === "user" ? styles.userMessage : m.role === "system" ? styles.systemMessage : styles.assistantMessage}>
         {m.role !== "user" && <small>{m.role === "system" ? "系统状态" : "设计助手"}</small>}<p>{m.text}</p>

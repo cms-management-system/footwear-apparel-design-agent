@@ -371,12 +371,14 @@ def auto_sampling_sheet(id: str):
 
 
 def workspace(pid):
+    from .cms import project_cms
     from .models3d import for_project
 
     with transaction() as db:
         h = head(db, pid)
+        project = db.get(Project, pid)
         return {
-            "project": {"id": pid, "name": db.get(Project, pid).name},
+            "project": {"id": pid, "name": project.name, "cms": project_cms(project)},
             "head": h.payload,
             "assets": [serialize(r) for r in records(db, pid, "asset")],
             "specs": [serialize(r) for r in records(db, pid, "spec")],

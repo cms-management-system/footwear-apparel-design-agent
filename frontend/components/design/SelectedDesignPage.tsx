@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { agentApi, type Workspace } from "@/lib/agent-api";
+import CmsReturn from "./CmsReturn";
 import SamplingSheetPanel from "./SamplingSheetPanel";
 import TechnicalFlatPanel from "./TechnicalFlatPanel";
 import styles from "./design.module.css";
@@ -53,7 +54,9 @@ export default function SelectedDesignPage({ versionId, projectId }: { versionId
     {workspace && !version && <p role="alert" className={styles.error}>没有找到这张设计图。请返回设计对话重新选择。</p>}
     {version && <>
       <header className={styles.designPageHeading}>
-        <div><span className={styles.eyebrow}>{workspace?.project.name}</span><h1>{title}</h1><p>{spec?.intent ?? "查看选中的设计图与设计要求。"}</p></div>
+        <div><span className={styles.eyebrow}>{workspace?.project.name}</span><h1>{title}</h1><p>{spec?.intent ?? "查看选中的设计图与设计要求。"}</p>
+          {workspace?.project.cms?.package_id && <p className={styles.packageChip}>已关联证据包 <span className={styles.mono}>{workspace.project.cms.package_id}</span></p>}
+        </div>
         <a className={styles.pageLink} href={agentApi.delivery(version.id)}>下载图片与设计资料</a>
       </header>
       <div className={styles.designPageHero}>
@@ -73,6 +76,7 @@ export default function SelectedDesignPage({ versionId, projectId }: { versionId
           </div>
         </aside>
       </div>
+      {confirmed && <CmsReturn projectId={projectId} versionId={version.id} cms={workspace?.project.cms} intent={spec?.intent} reviewSummary={version.review?.summary} />}
       {confirmed && <section className={styles.sampleHandoff} aria-label="首版打样交接">
         <div className={styles.sampleHandoffHeading}>
           <div><span className={styles.eyebrow}>图片已选定 · 下一步</span><h2>打样交接资料</h2><p>{sheet ? "这款的设计依据已整理。你可以下载沟通包，未知参数留待核对。" : "让助手先整理已确认的要求和图片检查结果，未知参数留待核对。"}</p></div>

@@ -8,7 +8,7 @@
     "start": "next start --port 5180",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "eslint components/design lib/agent-api.ts app/design app/designs app/requirements app/page.tsx tests/design-*.test.tsx tests/model-3d.test.tsx"
+    "lint": "eslint components/design lib/agent-api.ts lib/cms.ts app/layout.tsx app/design app/designs app/requirements app/page.tsx tests/design-*.test.tsx tests/model-3d.test.tsx"
   },
   "dependencies": {
     "@google/model-viewer": "^4.3.1",

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Capabilities, Reference } from "@/lib/agent-api";
 import styles from "./design.module.css";
 export type StartAsset = { id: string; file: File; role: Reference["role"] };
-export type StartInput = { intent: string; assets: StartAsset[]; authorized: boolean };
+export type StartInput = { intent: string; assets: StartAsset[]; authorized: boolean; cmsPackageId?: string };
 const roles = { structure: "草图 / 结构廓形", fabric: "面料外观", color: "配色参考", detail: "局部细节" };
 function Preview({ file }: { file: File }) {
   const [url, setUrl] = useState("");
