@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,51 @@ from .store import AgentError
 from .streaming import collect_stream
 
 PROMPTS = Path(__file__).parent / "prompts"
+log = logging.getLogger(__name__)
+
+
+def _has_field(label, name):
+    text = str(label).strip()
+    return text.startswith(f"{name}=") or f"; {name}=" in text
+
+
+def _role_phrase(label):
+    return str(label).strip().split(";")[-1].strip()
+
+
+def _is_current_design(label):
+    if _has_field(label, "asset_id"):
+        return False
+    return _has_field(label, "current_version_id") or _role_phrase(label) == "本轮修正底图"
+
+
+def _is_edit_base(label):
+    if _has_field(label, "asset_id"):
+        return False
+    return _has_field(label, "base_version_id") or _role_phrase(label) == "修改底图"
+
+
+def _is_user_reference(label):
+    if _has_field(label, "asset_id"):
+        return True
+    return not any(
+        _has_field(label, name) or _role_phrase(label) == phrase
+        for name, phrase in (
+            ("base_version_id", "修改底图"),
+            ("current_version_id", "本轮修正底图"),
+            ("parent_version_id", "修正前底图"),
+            ("candidate_id", "待检查候选"),
+        )
+    )
+
+
+def _primary_reference(images):
+    """Image being edited or the current selected design, otherwise the first user reference."""
+    for predicate in (_is_current_design, _is_edit_base, _is_user_reference):
+        for item in images:
+            if predicate(item[0]):
+                return item
+    return images[0]
 
 
 class Provider:
@@ -26,6 +72,7 @@ class Provider:
         self.vision_key = os.getenv("AGENT_VISION_API_KEY", "")
         self.image_url, self.image_key, self.image_model = cfg.image_base_url, cfg.image_api_key, cfg.image_model
         self.image_size = cfg.image_size
+        self.image_reference_format = cfg.image_reference_format
         self.vision_thinking = os.getenv("AGENT_VISION_THINKING", "")
         self.enabled = os.getenv("AGENT_ENABLED", "false") == "true"
         self.image_verified = os.getenv("AGENT_REFERENCE_IMAGES_ENABLED", "false") == "true"
@@ -230,7 +277,7 @@ class Provider:
             "watermark": True,
         }
         if images:
-            payload["image"] = [assets.data_url(p) for _, p in images]
+            payload["image"] = self._reference_images(images)
         result = self._post(self.image_url.rstrip("/") + "/images/generations", self.image_key, payload)
         self.last_receipt = self.receipt(result)
         try:
@@ -240,3 +287,12 @@ class Provider:
             return base64.b64decode(data[0]["b64_json"], validate=True)
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise AgentError("IMAGE_OUTPUT_INVALID", "服务未返回一张有效图片；不会用占位图替代", 502) from exc
+
+    def _reference_images(self, images):
+        if self.image_reference_format != "single":
+            return [assets.data_url(payload) for _, payload in images]
+        _, payload = _primary_reference(images)
+        dropped = len(images) - 1
+        if dropped:
+            log.info("已忽略其余 %d 张参考图，仅发送主参考图", dropped)
+        return assets.data_url(payload)

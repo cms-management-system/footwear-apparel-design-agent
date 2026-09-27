@@ -17,6 +17,14 @@ def _positive_float(value: str | None, default: float) -> float:
     return parsed if parsed > 0 else default
 
 
+def _image_reference_format(value: str | None) -> str:
+    """list sends a JSON array (Ark). single sends one string (relays that reject arrays)."""
+    fmt = (value or "").strip().lower()
+    if fmt in {"list", "single"}:
+        return fmt
+    return "list"
+
+
 def _load_env() -> None:
     env = ROOT / ".env"
     if not env.exists():
@@ -36,6 +44,7 @@ class Config:
         self.image_base_url = os.environ.get("IMAGE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
         self.image_model = os.environ.get("IMAGE_MODEL", "")
         self.image_size = os.environ.get("IMAGE_SIZE", "2K")
+        self.image_reference_format = _image_reference_format(os.environ.get("IMAGE_REFERENCE_FORMAT"))
         self.db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.sqlite3")
         self.cms_base_url = os.environ.get("CMS_BASE_URL", "http://127.0.0.1:8001").strip().rstrip("/")
         self.cms_api_key = os.environ.get("CMS_API_KEY", "").strip()
