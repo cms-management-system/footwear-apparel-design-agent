@@ -18,8 +18,9 @@
 .studio button:hover:not(:disabled) { background:var(--c-fog); }
 .studio button:disabled { opacity:.5; cursor:not-allowed; }
 .studio :is(button, a, input, textarea, select):focus-visible { outline:1px solid var(--c-text); outline-offset:3px; }
-.studio .primary { background:var(--c-text); color:white; border-color:var(--c-text); }
-.studio .primary:hover:not(:disabled) { background:var(--c-text); }
+.studio button.primary:not(:disabled) { background:#000; color:#fff; border-color:#000; opacity:1; }
+.studio button.primary:not(:disabled):hover { background:#000; color:#fff; }
+.studio button.primary:disabled { background:#000; color:#fff; border-color:#000; opacity:.45; }
 .projectBar button { margin-bottom:10px; }
 .capability { display:flex; gap:16px; flex-wrap:wrap; padding:14px 18px; background:var(--c-fog); border-left:1px solid var(--c-text-2); margin-bottom:24px; font-size:13px; }
 .columns { display:grid; grid-template-columns:minmax(0, 1.5fr) minmax(300px, 1fr); gap:24px; align-items:start; }

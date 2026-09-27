@@ -14,12 +14,10 @@ export default function PlatformBar() {
         <span>鞋服设计</span>
       </div>
       <nav className="platformNav" aria-label="协作平台">
-        {links.map((link, index) => (
-          <span key={link.label}>
-            {index > 0 && <span aria-hidden="true"> · </span>}
-            <a href={link.href} aria-current={link.current ? "page" : undefined}>{link.label}</a>
-          </span>
-        ))}
+        {links.map((link, index) => [
+          index > 0 ? <span key={`${link.label}-sep`} className="platformSep" aria-hidden="true">·</span> : null,
+          <a key={link.label} href={link.href} aria-current={link.current ? "page" : undefined}>{link.label}</a>,
+        ])}
       </nav>
     </header>
   );
