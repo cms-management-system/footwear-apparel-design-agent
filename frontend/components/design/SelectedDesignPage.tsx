@@ -1,4 +1,5 @@
 "use client";
+import { appPath } from "@/lib/app-path";
 
 import { useCallback, useEffect, useState } from "react";
 import { agentApi, type Workspace } from "@/lib/agent-api";
@@ -12,7 +13,7 @@ export default function SelectedDesignPage({ versionId, projectId }: { versionId
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
   const validProject = Number.isSafeInteger(projectId) && projectId > 0;
-  const back = validProject ? `/?project=${projectId}` : "/";
+  const back = appPath(validProject ? `/?project=${projectId}` : "/");
   const refresh = useCallback(async () => { setWorkspace(await agentApi.workspace(projectId)); }, [projectId]);
 
   useEffect(() => {

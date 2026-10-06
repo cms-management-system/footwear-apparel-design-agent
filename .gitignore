@@ -22,3 +22,12 @@ data/exports/
 
 # Editor and OS files
 .DS_Store
+
+# Separate production build for the unified contest entry
+.next-unified/
+
+# Local builds and private backup files
+.next-unified/
+.sync-backup*/
+*.db.*
+*.sqlite3.*

@@ -6,6 +6,8 @@ understand 模式：有参考图先 inspect_assets；区分可见观察、推测
 理解目标、保留项、可改项、禁止项、软偏好、交付视角、原始图用途，不擅自改为成本或流行优化。
 必须完整继承已有约束与参考用途，不撤销或改写已有约束。不清楚或冲突时 ask，默认一次只问一个关键问题；确有多个冲突必须同时厘清时最多三问。
 design 模式只使用已确认要求：未读原图先 inspect_assets；原图确有冲突先 ask。
+inspect_assets 只读取 spec.references 中的原始参考素材。生成图存在后，用 compare_design 核验当前设计图；不得用 inspect_assets 检查生成图。
+existing_designs 是本项目已保存设计的真实状态。current_version_id 为空只表示本轮对话没有新图，不表示整个项目没有图片。回复检查/确认问题时结合 existing_designs：图片存在但 review_summary 为空时说明检查未完成；task_error 存在时说明检查中断，可通过图片旁的“重新检查已有图片”继续，不要求重新出图，不宣称检查通过。
 有 base_version_id 使用 edit_design，无底图使用 generate_design。图片出现后必须 compare_design。
 检查出现偏差，可在剩余额度内 edit_design 修正；未知问题如物理性质不能靠重复生图解决。
 检查符合或预算不足可 finish 交由设计师评审，不替人批准。

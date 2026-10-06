@@ -1,4 +1,5 @@
 "use client";
+import { appPath } from "@/lib/app-path";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { agentApi, activeTask, type Capabilities, type Reference, type StyleDirection, type Version, type Workspace } from "@/lib/agent-api";
 import DesignAgentPanel from "./DesignAgentPanel";
@@ -102,7 +103,7 @@ export default function DesignChat() {
         agentApi.workspace(pid).then(update).catch(() => { if (!disposed) setConnection("连接中断，正在恢复对话…"); });
         timer = setTimeout(connect, 2500); return;
       }
-      source = new EventSource(`/api/project/${pid}/design-events`);
+      source = new EventSource(appPath(`/api/project/${pid}/design-events`));
       source.addEventListener("workspace", event => { try { update(JSON.parse((event as MessageEvent).data)); } catch { setConnection("正在重新同步对话…"); } });
       const reconnect = () => { source?.close(); if (!disposed) timer = setTimeout(connect, 1500); };
       source.addEventListener("done", reconnect);
@@ -134,7 +135,7 @@ export default function DesignChat() {
     setVersionDrafts({}); setSelectedVersionId(null); setDetailsOpen(false); setDetailsVisited(false); setDetailsDirty(false); setDetailsBusy(false); setPlanDirty(false);
     setPid(id); setWorkspace(null); setError(""); setConnection(""); dirty.current = false; pending.current = null;
     setTurn(x => x + 1); follow.current = true;
-    window.history.replaceState(null, "", id ? `/?project=${id}` : "/");
+    window.history.replaceState(null, "", appPath(id ? `/?project=${id}` : "/"));
   }
   async function send(input: StartInput) {
     if (busy || working || detailsDirty || detailsBusy || versionDirty || planDirty) return;
@@ -152,7 +153,7 @@ export default function DesignChat() {
       if (attempt.signature !== signature) { attempt.signature = signature; attempt.key = crypto.randomUUID(); attempt.expected = current?.id ?? null; }
       await agentApi.sendMessage(attempt.pid, { ...data, expected_spec_id: attempt.expected ?? null, idempotency_key: attempt.key! });
       dirty.current = false; follow.current = true;
-      if (!pid) { setPid(attempt.pid); window.history.replaceState(null, "", `/?project=${attempt.pid}`); }
+      if (!pid) { setPid(attempt.pid); window.history.replaceState(null, "", appPath(`/?project=${attempt.pid}`)); }
       // Receipt acknowledges delivery; a later refresh failure must not re-enable sending this turn.
       pending.current = null; setTurn(x => x + 1);
       try { await refresh(attempt.pid); setProjects((await agentApi.projects()).items); }
@@ -237,9 +238,9 @@ export default function DesignChat() {
       <Model3DPanel version={v} title={title} model={workspace?.models3d?.find(m => m.version_id === v.id)} caps={caps} />
       <div className={selected ? styles.selectedVersionInfo : undefined}>
         {v.style_direction && <p className={styles.directionNote}><b>本款方向：</b>{v.style_direction.explore}<br /><span>{v.style_direction.rationale}</span></p>}
-        <p>{v.review?.summary ?? "图片已生成，检查结果尚未就绪。"}</p>
+        <p>{v.review?.summary ?? (working ? "图片已保存，正在处理检查任务。" : "图片已保存，自动检查未完成。请在下方重新检查已有图片。")}</p>
         {selected && !!v.review?.checks.length ? <div className={styles.reviewChecklist}><h3>逐项检查</h3><ul>{v.review.checks.map(check => <li key={check.constraint_id}><span>{check.status === "pass" ? "符合" : check.status === "deviation" ? "有偏差" : "待核对"}</span><p>{check.evidence}</p></li>)}</ul></div>
-          : <details><summary>逐项检查</summary>{v.review?.checks.map(check => <p key={check.constraint_id}>{check.evidence}</p>)}</details>}
+          : v.review && <details><summary>逐项检查</summary>{v.review.checks.map(check => <p key={check.constraint_id}>{check.evidence}</p>)}</details>}
       </div>
     </div><VersionActions key={`${pid}:${v.id}`} version={v} title={title} current={current} projectId={pid!} caps={caps} hasModifiedVersion={hasModifiedVersion} selected={v.status === "confirmed"} confirmableSpecId={summarySpec?.id} awaitingTaskId={task?.status === "awaiting_input" && !busy && !detailsDirty && !detailsBusy && !Object.entries(versionDrafts).some(([id, dirty]) => id !== v.id && dirty) ? task.id : undefined} onReveal={() => { follow.current = false; }} locked={busy || detailsDirty || detailsBusy || Object.entries(versionDrafts).some(([id, dirty]) => id !== v.id && dirty) || activeTask(task) || !!uncertainImageCall} onAction={fn => { follow.current = false; return operate(fn); }} onDirtyChange={onVersionDirty} />{taskBase === v.id && taskStatus}
       {children.map((child, index) => renderVersion(child, index, title, true))}
@@ -255,7 +256,7 @@ export default function DesignChat() {
         {pid && confirmedVersions.length > 0 && <details className={styles.confirmedPicker}>
           <summary>已确认 {confirmedVersions.length} 款</summary>
           <nav className={styles.confirmedMenu} aria-label="已确认款式的方案页">
-            {confirmedVersions.map((version, index) => <a key={version.id} href={`/designs/${version.id}?project=${pid}`}>
+            {confirmedVersions.map((version, index) => <a key={version.id} href={appPath(`/designs/${version.id}?project=${pid}`)}>
               <span>{version.design_index ? `方案 ${version.design_index} / ${version.design_count ?? confirmedVersions.length}` : `方案 ${index + 1}`}{version.parent_version_id ? " · 修改版" : ""}</span>
               {version.style_direction?.name && <small>{version.style_direction.name}</small>}
             </a>)}

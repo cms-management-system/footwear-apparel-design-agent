@@ -3,7 +3,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
@@ -12,7 +12,17 @@ from sqlalchemy import select
 from ..models import Project
 from . import assets, chat, cms, events, models3d, sample_pack, service, style, technical_flat
 from .providers import Provider
-from .schemas import ChatIn, CorrectionIn, FeedbackIn, RevisionIn, SamplingSheetIn, SpecIn, StylePlanEdit, TaskIn
+from .schemas import (
+    ChatIn,
+    CorrectionIn,
+    FeedbackIn,
+    RecheckIn,
+    RevisionIn,
+    SamplingSheetIn,
+    SpecIn,
+    StylePlanEdit,
+    TaskIn,
+)
 from .store import AgentError, Record, create, head, records, require, serialize, transaction
 
 
@@ -37,6 +47,11 @@ class AgentRoute(APIRoute):
 
 
 router = APIRouter(prefix="/api", tags=["design-agent"], route_class=AgentRoute)
+
+
+@router.get("/cms/packages")
+def cms_packages(offset: int = Query(default=0, ge=0)) -> dict:
+    return cms.fetch_packages(offset)
 
 
 @router.get("/cms/packages/{package_id}")
@@ -157,6 +172,11 @@ def revise(id: str, data: RevisionIn) -> dict:
 @router.post("/design-versions/{id}/confirm")
 def confirm_version(id: str) -> dict:
     return service.confirm_version(id)
+
+
+@router.post("/design-versions/{id}/recheck", status_code=202)
+def recheck_version(id: str, data: RecheckIn) -> dict:
+    return service.recheck_version(id, data)
 
 
 @router.post("/design-versions/{id}/sampling-sheet", status_code=201)

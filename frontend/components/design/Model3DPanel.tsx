@@ -62,7 +62,7 @@ export default function Model3DPanel({ version, title, model, caps }: {
       setError(e instanceof Error ? e.message : "3D 任务未提交，请稍后重试。");
     } finally { setSubmitting(false); }
   }
-  return <section className={styles.modelSection} aria-label={`${title}的效果图与3D预览`}>
+  return <section className={styles.modelSection} aria-label={`${title}的效果图${model || caps?.three_d?.enabled ? "与3D预览" : ""}`}>
     {ready && <div className={styles.modelTabs} role="group" aria-label="查看方式">
       <button type="button" aria-pressed={view === "image"} onClick={() => setView("image")}>效果图</button>
       <button type="button" aria-pressed={view === "model"} onClick={() => setView("model")}>旋转查看 3D</button>
@@ -74,7 +74,7 @@ export default function Model3DPanel({ version, title, model, caps }: {
         {submitting ? "正在提交 3D 任务…" : `制作这款的 3D 预览 · 预计 ¥${((caps?.three_d?.estimated_cost_fen ?? 180) / 100).toFixed(2)}`}
       </button>
       <p className={styles.muted}>仅发送这款效果图至火山方舟影眸；点击即提交一次付费生成。3D 是概念预览，需人工检查背面和结构。</p>
-    </div> : <p className={styles.modelUnavailable}>3D 预览待接通</p>)}
+    </div> : null)}
     {inProgress && <p role="status" className={styles.modelProgress}>{model.status === "saving" ? "模型已生成，正在保存到本地…" : "正在为这款生成真正的 3D 模型；完成后可在这里旋转查看。"}</p>}
     {model?.status === "interrupted" && <p role="alert" className={styles.error}>提交结果不确定，已停止自动重试，避免重复计费。请核对方舟任务记录。</p>}
     {["failed", "failed_before_submit"].includes(model?.status ?? "") && <p role="alert" className={styles.error}>{model?.error?.message ?? "3D 生成失败；原效果图仍保留。"}</p>}

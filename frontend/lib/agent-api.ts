@@ -1,3 +1,5 @@
+import { appPath } from "./app-path";
+
 export type Constraint = { id: string; kind: "must_keep" | "may_change" | "forbidden" | "preference"; text: string; region: string; verification: "visual" | "physical" };
 export type Reference = { asset_id: string; role: "structure" | "fabric" | "color" | "detail"; region: string; instruction: string };
 export type DesignSpec = { intent: string; references: Reference[]; constraints: Constraint[]; deliverables: string; base_version_id: string | null; edit_region: string; conflicts: string[]; assumptions: string[] };
@@ -23,7 +25,7 @@ export const blankSpec = (): DesignSpec => ({ intent: "", references: [], constr
 export const labels: Record<string, string> = { queued: "已排队", running: "正在执行", awaiting_input: "需要你补充", awaiting_review: "等待你评审", completed: "本轮完成", failed: "本轮未完成", budget_exhausted: "已达到额度", cancelled: "已取消后续步骤", interrupted: "执行中断", candidate: "尚未检查", ready_for_review: "待设计师确认", needs_revision: "有待解决问题", confirmed: "已确认", superseded: "历史确认版", draft: "待确认要求" };
 export const statusLabel = (status: string) => labels[status] ?? "状态待核对";
 export const activeTask = (task?: Task) => !!task && ["queued", "running", "awaiting_input"].includes(task.status);
-const root = "/api";
+const root = appPath("/api");
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 30000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -46,6 +48,7 @@ export const agentApi = {
   projects: () => request<{ items: { id: number; name: string }[] }>("/design-projects"),
   create: (name: string, cmsPackageId?: string) => post<{ id: number; cms_package_id?: string | null }>("/project", cmsPackageId ? { name, cms_package_id: cmsPackageId } : { name }),
   cmsPackage: (packageId: string) => request<CmsPackage>(`/cms/packages/${encodeURIComponent(packageId)}`),
+  cmsPackages: (offset = 0) => request<{ items: CmsPackage[]; next_offset: number | null }>(`/cms/packages?offset=${offset}`, { cache: "no-store" }),
   submitCmsResponse: (projectId: number, body: { version_id: string; response_status: "adopted" | "not_adopted" | "need_evidence"; design_note: string }) => post<CmsResponseResult>(`/projects/${projectId}/cms-response`, body),
   workspace: async (id: number) => { const data = await request<Workspace>(`/project/${id}/design-workspace`); if (!data.project || !Array.isArray(data.tasks) || !Array.isArray(data.specs) || !Array.isArray(data.versions) || !Array.isArray(data.assets)) throw new Error("工作区数据异常，请重新连接"); return data; },
   upload: (id: number, file: File) => request<Asset>(`/project/${id}/design-assets?name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "Content-Type": file.type }, body: file }),
@@ -58,6 +61,7 @@ export const agentApi = {
   revise: (id: string, text: string, edit_region: string, expected_spec_id: string) => post<SpecRecord>(`/design-versions/${id}/revise`, { text, edit_region, expected_spec_id }),
   correctCheck: (id: string, constraint_id: string, evidence: string) => post<Version>(`/design-versions/${id}/check-corrections`, { constraint_id, status: "pass", evidence }),
   confirmVersion: (id: string) => post<Version>(`/design-versions/${id}/confirm`),
+  recheckVersion: (id: string, key: string) => post<Task>(`/design-versions/${id}/recheck`, { authorized: true, idempotency_key: key }),
   saveSamplingSheet: (id: string, fields: SamplingFields, expected_sheet_id: string | null) => post<SamplingSheet>(`/design-versions/${id}/sampling-sheet`, { ...fields, expected_sheet_id }),
   autoSamplingSheet: (id: string) => post<SamplingSheet>(`/design-versions/${id}/sampling-sheet/auto`),
   technicalFlat: (id: string) => request<{ item: TechnicalFlat | null }>(`/design-versions/${id}/technical-flat`),

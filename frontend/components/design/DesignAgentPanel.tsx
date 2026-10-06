@@ -1,4 +1,5 @@
 "use client";
+import { appPath } from "@/lib/app-path";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { activeTask, agentApi, blankSpec, statusLabel, type Capabilities, type Constraint, type DesignSpec, type SpecRecord, type Reference, type Workspace } from "@/lib/agent-api";
@@ -96,7 +97,7 @@ export default function DesignAgentPanel({ projectId, embedded = false, snapshot
     if (!saved && dirty && !window.confirm("要求单尚未保存，切换将丢失本次编辑。继续切换？")) return;
     setWorkspace(null); source.current = null; dirtyRef.current = false; setDirty(false); setDraft(blankSpec());
     setError(""); setNotice(""); setAuthorized(false); setBase(""); setFeedback(""); selectedPid.current = id || null; setPid(id || null);
-    const route = window.location.pathname === "/requirements" ? "/requirements" : "/";
+    const route = window.location.pathname === appPath("/requirements") ? appPath("/requirements") : appPath("/");
     window.history.replaceState(null, "", id ? `${route}?project=${id}` : route);
   }
   async function startDesign(input: StartInput) {
@@ -160,7 +161,7 @@ export default function DesignAgentPanel({ projectId, embedded = false, snapshot
 
   const Container = embedded ? "section" : "main";
   return <Container className={`${styles.studio} ${embedded ? styles.embedded : !pid ? styles.welcome : ""}`}>
-    {!embedded && <><a href={pid ? `/?project=${pid}` : "/"}>返回设计对话</a>
+    {!embedded && <><a href={appPath(pid ? `/?project=${pid}` : "/")}>返回设计对话</a>
     <div className={styles.heading}><div><h1>{pid ? "一起推敲这份设计" : "先说说你要做什么样的衣服"}</h1><p>{pid ? "素材、设计要求和每一版修改，都保存在这里。" : "说出想法，或带上你的草图。"}</p></div></div>
     {(pid || projects.length > 0) && <details className={styles.projectPicker}><summary>{pid ? workspace?.project.name ?? "当前设计" : "继续之前的设计"}</summary><div className={styles.projectBar}>
       <label>继续已保存的设计<select aria-label="选择设计项目" value={pid ?? ""} onChange={e => choose(Number(e.target.value))} disabled={busy || !projects.length}><option value="" disabled>选择已保存的设计</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>

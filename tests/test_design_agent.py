@@ -86,6 +86,9 @@ def test_enabling_images_keeps_existing_understanding_conversation_valid(env):
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
+    # Local .env may select a relay-only image format; tests own their config.
+    monkeypatch.setattr(config, "_load_env", lambda: None)
+    monkeypatch.delenv("IMAGE_REFERENCE_FORMAT", raising=False)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'agent.sqlite3'}")
     monkeypatch.setenv("ASSETS_DIR", str(tmp_path / "assets"))
     monkeypatch.setenv("MODEL_PROVIDER", "mock")
@@ -257,6 +260,36 @@ def task(pid, sid, provider, mode="design", key="unique-key", **kwargs):
 def read_task(id):
     with transaction() as db:
         return require(db, id).status, deepcopy(require(db, id).payload)
+
+
+@pytest.mark.parametrize("refs", [0, 1])
+def test_inspecting_generated_candidate_uses_design_review_without_rerender(env, refs):
+    class CandidateInspectionProvider(FakeProvider):
+        def plan(self, context):
+            if context["current_version_id"] and not context["review"]:
+                self.inspecting_candidate = True
+                return {"action": "inspect_assets", "summary": "检查刚生成的设计图"}
+            return super().plan(context)
+
+        def inspect(self, spec, images):
+            # A candidate observation is invalid for the original-assets contract.
+            if getattr(self, "inspecting_candidate", False):
+                return {"observations": [{"asset_id": "candidate", "observable_features": ["新图"],
+                        "inferences": [], "unknowns": []}], "conflicts": []}
+            return super().inspect(spec, images)
+
+    provider = CandidateInspectionProvider()
+    tid = task(env, spec(env, refs=refs), provider)
+    run_task(tid, provider)
+    status, payload = read_task(tid)
+    assert status == "awaiting_review"
+    assert payload.get("error") is None
+    assert len([call for call in provider.calls if call[0] == "render"]) == 1
+    assert len([call for call in provider.calls if call[0] == "compare"]) == 1
+    assert len([call for call in provider.calls if call[0] == "inspect"]) == refs
+    with transaction() as db:
+        version = require(db, payload["current_version_id"], "version", env)
+        assert version.payload["review"]["goal"]["status"] == "pass"
 
 
 def test_confirmed_style_plan_controls_multi_design_and_revision_lineage(env):
@@ -1822,3 +1855,74 @@ def test_switching_revision_target_does_not_copy_other_candidate_changes(env):
     assert [c[0] for c in provider.calls] == ["render", "compare"]
     child = service.workspace(env)["versions"][-1]
     assert child["parent_version_id"] == versions[1]["id"]
+
+
+def test_recheck_existing_candidate_is_idempotent_and_never_renders(env):
+    from app.agent.schemas import RecheckIn
+
+    provider = FakeProvider()
+    tid = task(env, spec(env), provider)
+    run_task(tid, provider)
+    with transaction() as db:
+        original = require(db, tid)
+        vid = original.payload['current_version_id']
+        version = require(db, vid)
+        saved_image = deepcopy(version.payload['image'])
+        change(version, review=None)
+        version.status = 'candidate'
+        original.status = 'failed'
+        change(original, error={'code': 'INSPECTION_INVALID', 'message': 'original failure'})
+    request = RecheckIn(authorized=True, idempotency_key='recheck-test-1')
+    retry = service.recheck_version(vid, request, provider)
+    assert service.recheck_version(vid, request, provider)['id'] == retry['id']
+    with transaction() as db:
+        require(db, retry['id']).status = 'running'
+    before_renders = len([c for c in provider.calls if c[0] == 'render'])
+    run_task(retry['id'], provider)
+    status, payload = read_task(retry['id'])
+    assert status == 'awaiting_review'
+    assert payload['image_calls'] == 0
+    assert len([c for c in provider.calls if c[0] == 'render']) == before_renders
+    with transaction() as db:
+        version = require(db, vid)
+        assert version.payload['image'] == saved_image
+        assert version.payload['review']['goal']['status'] == 'pass'
+        assert require(db, tid).status == 'failed'
+    service.confirm_version(vid)
+    assert read_task(retry['id'])[0] == 'completed'
+
+
+def test_recheck_rejects_changed_requirements(env):
+    from app.agent.schemas import RecheckIn
+
+    provider = FakeProvider()
+    sid = spec(env)
+    tid = task(env, sid, provider)
+    run_task(tid, provider)
+    vid = read_task(tid)[1]['current_version_id']
+    with transaction() as db:
+        service.save_spec(db, env, SpecIn(intent='新的鞋类要求', expected_spec_id=sid))
+    with pytest.raises(AgentError) as error:
+        service.recheck_version(vid, RecheckIn(authorized=True, idempotency_key='stale-review-key'), provider)
+    assert error.value.code == 'STALE_SOURCE'
+
+
+def test_understanding_context_includes_saved_design_and_check_failure(env):
+    provider = FakeProvider()
+    sid = spec(env)
+    tid = task(env, sid, provider)
+    run_task(tid, provider)
+    with transaction() as db:
+        original = require(db, tid)
+        vid = original.payload['current_version_id']
+        change(require(db, vid), review=None)
+        original.status = 'failed'
+        change(original, error={'code': 'INSPECTION_INVALID', 'message': 'check failed'})
+    chat_provider = FakeProvider()
+    chat_task = task(env, sid, chat_provider, mode='understand', key='saved-image-chat')
+    run_task(chat_task, chat_provider)
+    context = next(c[1] for c in chat_provider.calls if c[0] == 'plan')
+    saved = context['existing_designs'][0]
+    assert saved['id'] == vid and saved['has_image'] is True
+    assert saved['review_summary'] is None
+    assert saved['task_error']['code'] == 'INSPECTION_INVALID'
