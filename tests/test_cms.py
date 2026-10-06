@@ -126,6 +126,22 @@ def _link(pid, package_id="PKG-1", body=None):
     return snapshot
 
 
+def test_approved_list_pagination_and_validation(env, monkeypatch):
+    from app.main import app
+    items = [{"package_id": f"PKG-{n}", "status": "approved", "requirement_desc": "通勤"} for n in range(21)]
+    scripted = _script(monkeypatch, [Response(200, items), Response(200, []), Response(200, [{"package_id": "PKG-X", "status": "pending"}]), Response(200, {"items": []})])
+    with TestClient(app) as client:
+        page = client.get("/api/cms/packages").json()
+        assert len(page["items"]) == 20 and page["next_offset"] == 20
+        assert page["items"][0]["requirement_desc"] == "通勤"
+        assert client.get("/api/cms/packages?offset=20").json() == {"items": [], "next_offset": None}
+        assert client.get("/api/cms/packages").status_code == 502
+        assert client.get("/api/cms/packages").status_code == 502
+        assert client.get("/api/cms/packages?offset=-1").status_code == 422
+    assert scripted.calls[1]["url"].endswith("status=approved&limit=21&offset=20")
+    assert scripted.calls[0]["headers"]["X-API-Key"] == "design-secret"
+
+
 def test_package_normalizes_missing_and_extra_fields(env, monkeypatch):
     raw = {"status": "approved", "constraints": "不能改领口", "note": {"from": "cms"}}
     scripted = _script(monkeypatch, [Response(200, raw)])
@@ -229,7 +245,7 @@ def test_design_response_is_idempotent_on_the_same_version(env, monkeypatch):
     assert sent["source_agent"] == "design"
     assert sent["package_id"] == "PKG-1"
     assert sent["design_image"] == [f"http://public.test/api/design-versions/{version_id}/image"]
-    assert sent["version"] == 2
+    assert sent["version"] == "v2"
     assert "方领" in sent["design_note"]
     assert sent["response_status"] == "need_evidence"
     assert scripted.calls[1]["json"]["response_status"] == "adopted"

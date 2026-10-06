@@ -6,7 +6,7 @@ import { agentApi, blankSpec, type StyleDirection, type Workspace } from "@/lib/
 
 vi.mock("@/lib/agent-api", async importOriginal => {
   const original = await importOriginal<typeof import("@/lib/agent-api")>();
-  return { ...original, agentApi: { ...original.agentApi, capabilities: vi.fn(), projects: vi.fn(), workspace: vi.fn(), create: vi.fn(), upload: vi.fn(), sendMessage: vi.fn(), control: vi.fn(), save: vi.fn(), confirmSpec: vi.fn(), submit: vi.fn(), reviseStylePlan: vi.fn(), confirmStylePlan: vi.fn(), confirmVersion: vi.fn(), saveSamplingSheet: vi.fn(), autoSamplingSheet: vi.fn(), revise: vi.fn(), correctCheck: vi.fn() } };
+  return { ...original, agentApi: { ...original.agentApi, capabilities: vi.fn(), projects: vi.fn(), workspace: vi.fn(), create: vi.fn(), upload: vi.fn(), sendMessage: vi.fn(), control: vi.fn(), save: vi.fn(), confirmSpec: vi.fn(), submit: vi.fn(), reviseStylePlan: vi.fn(), confirmStylePlan: vi.fn(), confirmVersion: vi.fn(), recheckVersion: vi.fn(), saveSamplingSheet: vi.fn(), autoSamplingSheet: vi.fn(), revise: vi.fn(), correctCheck: vi.fn() } };
 });
 class Stream extends EventTarget {
   static instances: Stream[] = [];
@@ -590,4 +590,27 @@ it("出图调用结果未知时阻止直接重试，并允许先结束本轮", a
   await waitFor(() => expect(agentApi.control).toHaveBeenCalledWith("t1", "cancel"));
   await waitFor(() => expect((generate as HTMLButtonElement).disabled).toBe(false));
   expect(agentApi.submit).not.toHaveBeenCalled();
+});
+
+it("已有图片检查失败可单独重检，结果返回前不能确认", async () => {
+  const state = data();
+  state.specs[0].status = "confirmed";
+  state.tasks = [{ ...task(), id: "failed-design", mode: "design", status: "failed", error: { code: "INSPECTION_INVALID", message: "检查中断" } }];
+  state.versions = [{ id: "saved-image", task_id: "failed-design", status: "candidate", spec_id: "s1", parent_version_id: null, review: null }];
+  vi.mocked(agentApi.workspace).mockResolvedValue(state);
+  vi.mocked(agentApi.capabilities).mockResolvedValue({ understand: true, design: true, vision_service: "测试", image_service: "测试", quality_status: "待验", note: "", monthly_allocation_fen: 2000 });
+  vi.mocked(agentApi.recheckVersion).mockResolvedValue({ ...task(), id: "recheck-task", status: "queued" });
+  render(<DesignChat />);
+  const retry = await screen.findByRole("button", { name: "重新检查已有图片" });
+  expect((screen.getByRole("button", { name: "确认这款" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByText("图片已生成，检查结果尚未就绪。")).toBeNull();
+  fireEvent.click(retry);
+  await waitFor(() => expect(agentApi.recheckVersion).toHaveBeenCalledWith("saved-image", expect.any(String)));
+  expect(agentApi.submit).not.toHaveBeenCalled();
+  state.tasks = [{ ...task(), id: "recheck-task", mode: "design", status: "awaiting_review" }];
+  state.versions[0].review = { goal: { status: "pass", evidence: "符合" }, preservation: { status: "unknown", evidence: "无底图" }, checks: [], summary: "已有图片检查完成" };
+  state.versions[0].status = "ready_for_review";
+  act(() => Stream.instances[0].snapshot(state));
+  await screen.findByText("已有图片检查完成");
+  expect((screen.getByRole("button", { name: "确认这款" }) as HTMLButtonElement).disabled).toBe(false);
 });

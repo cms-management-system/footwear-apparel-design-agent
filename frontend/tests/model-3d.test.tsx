@@ -26,7 +26,7 @@ it("未配置或任务已在进行时，不再发起收费请求", () => {
   const disabled = { ...caps, three_d: { ...caps.three_d!, enabled: false } };
   const { rerender } = render(<Model3DPanel version={version} title="方案 2 / 3" caps={disabled} />);
   expect(screen.queryByRole("button", { name: /制作这款的 3D 预览/ })).toBeNull();
-  expect(screen.getByText("3D 预览待接通")).toBeTruthy();
+  expect(screen.queryByText("3D 预览待接通")).toBeNull();
   rerender(<Model3DPanel version={version} title="方案 2 / 3" caps={caps} model={{ id: "m1", version_id: version.id, status: "running", estimated_cost_fen: 180 }} />);
   expect(screen.queryByRole("button", { name: /制作这款的 3D 预览/ })).toBeNull();
   expect(screen.getByText(/正在为这款生成真正的 3D 模型/)).toBeTruthy();

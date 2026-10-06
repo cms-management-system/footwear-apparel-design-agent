@@ -74,6 +74,11 @@ class TaskIn(Strict):
         return self
 
 
+class RecheckIn(Strict):
+    authorized: Literal[True]
+    idempotency_key: str = Field(min_length=8, max_length=100)
+
+
 class StyleDirectionDraft(Strict):
     name: str = Field(min_length=2, max_length=60)
     theme: str = Field(min_length=3, max_length=300)

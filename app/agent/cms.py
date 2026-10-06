@@ -172,7 +172,7 @@ def _extract_ids(body: dict) -> list[str]:
     return ids
 
 
-def _request(method: str, path: str, *, json_body: dict | None = None, not_found: str) -> dict:
+def _request(method: str, path: str, *, json_body: dict | None = None, not_found: str, list_response: bool = False) -> dict | list:
     cfg = get_config()
     if not cfg.cms_api_key:
         raise AgentError("CMS_NOT_CONFIGURED", NOT_CONFIGURED, 503)
@@ -201,9 +201,19 @@ def _request(method: str, path: str, *, json_body: dict | None = None, not_found
                 message = remote.strip()
         status = 502 if response.status_code >= 500 else 400
         raise AgentError("CMS_REJECTED", message, status)
-    if not isinstance(body, dict):
+    if not isinstance(body, list if list_response else dict):
         raise AgentError("CMS_BAD_RESPONSE", "CMS 返回格式异常。", 502)
     return body
+
+
+def fetch_packages(offset: int = 0) -> dict:
+    body = _request("GET", f"/api/packages?status=approved&limit=21&offset={offset}",
+                    not_found="CMS 暂不支持自动读取，请联系维护者更新服务。", list_response=True)
+    if any(not isinstance(item, dict) or item.get("status") != "approved"
+           or not _PACKAGE_ID.fullmatch(_text(item.get("package_id"))) for item in body):
+        raise AgentError("CMS_BAD_RESPONSE", "CMS 返回了无效的已批准证据包，请稍后重试。", 502)
+    return {"items": [normalize_package(item) for item in body[:20]],
+            "next_offset": offset + 20 if len(body) > 20 else None}
 
 
 def fetch_package(package_id: str) -> dict:
@@ -263,7 +273,7 @@ def submit_response(pid: int, data: CmsResponseIn) -> dict:
             "design_image": [f"{get_config().public_base_url}/api/design-versions/{version.id}/image"],
             "design_note": note,
             "response_status": data.response_status,
-            "version": version_number,
+            "version": f"v{version_number}",
         }
     body = _request("POST", "/api/design-responses", json_body=payload, not_found=RESPONSE_MISSING)
     entry = {

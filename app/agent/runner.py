@@ -189,6 +189,23 @@ def one_step(id, provider, owner=None):
                 tool = "compare_design" if current else "edit_design"
         if current and payload.get("review_retry_version") == current.id:
             tool = "compare_design"
+        # inspect_assets is only for original references. Review an existing candidate
+        # with compare_design even when the planner uses the broader word "inspect".
+        if (
+            payload["mode"] == "design"
+            and tool == "inspect_assets"
+            and current
+            and (not spec["references"] or payload["observations"])
+        ):
+            tool = "compare_design"
+        if payload.get("review_only"):
+            if payload.get("review_completed"):
+                tool = "finish"
+                action = Action(action="finish", summary="已检查这张已有图片，请查看逐项结果后确认。")
+            elif spec["references"] and not payload["observations"]:
+                tool = "inspect_assets"
+            else:
+                tool = "compare_design"
         direction = None
         if payload.get("style_plan_id"):
             plan = require(db, payload["style_plan_id"], "style_plan", task.project_id)
@@ -312,6 +329,17 @@ def one_step(id, provider, owner=None):
             "inspection_conflicts": payload.get("inspection_conflicts", []),
             "feedback": payload["feedback"],
             "current_version_id": payload["current_version_id"],
+            "existing_designs": [
+                {
+                    "id": v.id, "spec_id": v.payload["spec_id"], "status": v.status,
+                    "has_image": bool(v.payload.get("image")),
+                    "review_summary": (v.payload.get("review") or {}).get("summary"),
+                    "task_error": require(
+                        db, v.payload.get("review_task_id", v.payload["task_id"]), "task"
+                    ).payload.get("error"),
+                }
+                for v in records(db, task.project_id, "version")[-6:]
+            ],
             "review": current.payload.get("review") if current else None,
             "remaining_image_calls": payload["max_image_calls"] - payload["image_calls"],
             "remaining_reasoning_calls": (
@@ -513,7 +541,7 @@ def one_step(id, provider, owner=None):
             if count > 1:
                 change(task, direction_version_ids=[*direction_ids, version.id])
         elif tool == "compare_design":
-            change(task, review_retry_version=None)
+            change(task, review_retry_version=None, review_completed=True)
             if review_incomplete:
                 change(task, review_warnings=[*task.payload.get("review_warnings", []), current.id])
                 if count == 1 and task.status == "running":

@@ -73,8 +73,10 @@ def submit(pid, data: TaskIn, provider=None):
         return submit_in(db, pid, data, provider)
 
 
-def submit_in(db, pid, data, provider):
+def submit_in(db, pid, data, provider, review_version=None):
     request_data = data.model_dump(exclude={"idempotency_key"})
+    if review_version:
+        request_data["review_version_id"] = review_version.id
     if not data.style_plan_id:
         request_data.pop("style_plan_id")
         request_data.pop("style_direction_ids")
@@ -100,7 +102,7 @@ def submit_in(db, pid, data, provider):
         raise AgentError("STALE_SOURCE", "要求单已更新，请刷新")
     if data.mode in {"design", "style"} and s.status != "confirmed":
         raise AgentError("CONFIRM_REQUIRED", "请先确认设计要求单")
-    provider.require("understand" if data.mode == "style" else data.mode)
+    provider.require("understand" if data.mode == "style" or review_version else data.mode)
     info = provider.capabilities()
     if data.mode == "design" and data.style_plan_id:
         plan = require(db, data.style_plan_id, "style_plan", pid)
@@ -142,7 +144,8 @@ def submit_in(db, pid, data, provider):
             "observations": [],
             "feedback": [],
             "questions": [],
-            "current_version_id": None,
+            "current_version_id": review_version.id if review_version else None,
+            **({"review_only": True, "max_image_calls": 0} if review_version else {}),
             "pending_action": None,
             "outcome": None,
         },
@@ -150,6 +153,34 @@ def submit_in(db, pid, data, provider):
         dedupe=f"task:{pid}:{data.idempotency_key}",
     )
     return serialize(row)
+
+
+def recheck_version(id, data, provider=None):
+    """Queue a bounded visual review of a saved image; never submit another render."""
+    provider = provider or Provider()
+    with transaction() as db:
+        version = require(db, id, "version")
+        key = "recheck-" + fingerprint({"version_id": id, "key": data.idempotency_key})
+        existing = db.scalar(select(Record).where(Record.dedupe == f"task:{version.project_id}:{key}"))
+        if existing:
+            return serialize(existing)
+        spec = require(db, version.payload["spec_id"], "spec", version.project_id)
+        if head(db, version.project_id).payload.get("spec_id") != spec.id:
+            raise AgentError("STALE_SOURCE", "设计要求已变化，请返回对应要求后再检查这张图")
+        if version.status in {"confirmed", "superseded"}:
+            raise AgentError("VERSION_LOCKED", "已确认或历史方案不能覆盖检查结果")
+        if not version.payload.get("image"):
+            raise AgentError("IMAGE_REQUIRED", "尚无已保存图片可检查")
+        result = submit_in(
+            db, version.project_id,
+            TaskIn(spec_id=spec.id, mode="design", authorized=data.authorized, idempotency_key=key),
+            provider, review_version=version,
+        )
+        task = require(db, result["id"], "task", version.project_id)
+        original = require(db, version.payload["task_id"], "task", version.project_id)
+        change(task, observations=original.payload.get("observations", []))
+        change(version, review_task_id=task.id)
+        return serialize(task)
 
 
 def task_control(id, action, text=""):
@@ -282,7 +313,7 @@ def confirm_version(id):
                 parent.status = "superseded"
         row.status = "confirmed"
         change(row, confirmed_at=now())
-        task = require(db, row.payload["task_id"], "task", row.project_id)
+        task = require(db, row.payload.get("review_task_id", row.payload["task_id"]), "task", row.project_id)
         if task.status == "awaiting_review":
             task.status = "completed"
             change(task, outcome="设计师已确认该候选版本")

@@ -1,4 +1,5 @@
 "use client";
+import { appPath } from "@/lib/app-path";
 import { useEffect, useRef, useState } from "react";
 import { agentApi, type Capabilities, type SpecRecord, type Version } from "@/lib/agent-api";
 import styles from "./design.module.css";
@@ -36,6 +37,14 @@ export default function VersionActions({ version, title, current, projectId, cap
     }
     run(() => agentApi.confirmVersion(version.id), () => setNotice(`${title}已选定。`));
   }
+  async function recheckThis() {
+    const storage = `design-recheck:${projectId}:${version.id}`;
+    let key = sessionStorage.getItem(storage);
+    if (!key) { key = crypto.randomUUID(); sessionStorage.setItem(storage, key); }
+    await agentApi.recheckVersion(version.id, key);
+    sessionStorage.removeItem(storage);
+    setNotice("正在检查已保存的图片，图片不会重新生成。");
+  }
   const run = (fn: () => Promise<unknown>, success?: () => void) => void onAction(async () => { setError(""); setNotice(""); await fn(); }).then(ok => { if (ok) success?.(); else setError("操作未完成，请检查提示后重试。"); });
   async function generateRevision() {
     if (!revision || !caps?.design) return;
@@ -49,17 +58,19 @@ export default function VersionActions({ version, title, current, projectId, cap
   return <section className={styles.versionActions} aria-label={`${title}的操作`} onFocusCapture={onReveal} onPointerDown={onReveal}>
     {selected ? <div className={styles.chosenActions}>
       <div><strong>已选定这款</strong><p>修改版确认之前，原版会保持选定。</p></div>
-      <div className={styles.actions}><a className={styles.pageLink} href={`/designs/${version.id}?project=${projectId}`}>查看这张图的方案页 →</a><button ref={editTrigger} disabled={(actionLocked && !awaitingTaskId) || !current} onClick={() => void openEditor()}>{awaitingTaskId ? "结束当前对话并修改这款" : "继续修改这款"}</button></div>
+      <div className={styles.actions}><a className={styles.pageLink} href={appPath(`/designs/${version.id}?project=${projectId}`)}>查看这张图的方案页 →</a><button ref={editTrigger} disabled={(actionLocked && !awaitingTaskId) || !current} onClick={() => void openEditor()}>{awaitingTaskId ? "结束当前对话并修改这款" : "继续修改这款"}</button></div>
     </div> : <>
       <h3>确认或修改此方案</h3>
+      {!version.review && <p className={styles.muted}>{actionLocked ? "正在处理当前任务，检查完成后才能确认。" : "这张图片的检查尚未完成，请先重新检查已有图片。"}</p>}
       <div className={styles.actions}>
+        {(!version.review || version.review.goal.status === "unknown") && <button disabled={actionLocked || !caps?.understand || version.spec_id !== current?.id || ["confirmed", "superseded"].includes(version.status)} onClick={() => run(recheckThis)}>重新检查已有图片</button>}
         <button className={styles.primary} disabled={(actionLocked && !awaitingTaskId) || !version.review || ![current?.id, confirmableSpecId].includes(version.spec_id) || ["confirmed", "superseded"].includes(version.status)} onClick={() => void confirmThis()}>{awaitingTaskId ? "结束当前对话并确认这款" : "确认这款"}</button>
         {!hasModifiedVersion && <button ref={editTrigger} disabled={(actionLocked && !awaitingTaskId) || !current} onClick={() => void openEditor()}>{awaitingTaskId ? "结束当前对话并修改这款" : "修改这款"}</button>}
         <a href={agentApi.delivery(version.id)}>下载图片与要求单</a>
       </div>
     </>}
     {error && <p role="alert" className={styles.error}>{error}</p>}
-    {notice && <p role="status" className={styles.notice}>{notice}</p>}
+    {notice && <p role="status" className={styles.notice}>{notice.startsWith("正在检查") && !locked ? (version.review ? "检查已完成，请查看逐项结果。" : "检查暂未完成，请查看任务提示后重试。") : notice}</p>}
     {locked && !awaitingTaskId && <p className={styles.muted}>当前任务进行中，操作暂不可用。</p>}
     {version.review?.checks.filter(c => c.status !== "pass").map(c => <div className={styles.check} key={c.constraint_id}><p>{c.evidence}</p>{version.spec_id === current?.id && current.spec.constraints.find(x => x.id === c.constraint_id)?.verification === "visual" && <button disabled={actionLocked || ["confirmed", "superseded"].includes(version.status)} onClick={() => { const evidence = window.prompt("请具体指出图片的哪个部位证明这一条已经符合要求（至少 10 个字）。原模型判断仍会保留。"); if (evidence) run(() => agentApi.correctCheck(version.id, c.constraint_id, evidence), () => setNotice("已记录你的视觉判断依据。")); }}>纠正这条视觉判断</button>}</div>)}
     {revision && !hasModifiedVersion && <section aria-label={`${title}的修改要求`} className={styles.revisionStep}>
