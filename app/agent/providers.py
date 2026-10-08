@@ -282,11 +282,41 @@ class Provider:
         self.last_receipt = self.receipt(result)
         try:
             data = result["data"]
-            if len(data) != 1:
+            if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
                 raise ValueError()
-            return base64.b64decode(data[0]["b64_json"], validate=True)
+            if "b64_json" in data[0]:
+                return base64.b64decode(data[0]["b64_json"], validate=True)
+            return self._download_image(data[0]["url"])
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise AgentError("IMAGE_OUTPUT_INVALID", "服务未返回一张有效图片；不会用占位图替代", 502) from exc
+
+    @staticmethod
+    def _download_image(url):
+        """Download only from explicitly configured image hosts, without model credentials."""
+        try:
+            if not isinstance(url, str):
+                raise ValueError()
+            parsed = urlparse(url)
+            allowed = {host.strip().lower() for host in os.getenv("AGENT_IMAGE_DOWNLOAD_HOSTS", "").split(",") if host.strip()}
+            if (parsed.scheme != "https" or parsed.hostname not in allowed
+                    or parsed.username is not None or parsed.password is not None
+                    or parsed.port not in (None, 443)):
+                raise ValueError()
+            parts, size = [], 0
+            with httpx.Client(timeout=httpx.Timeout(60, connect=15), follow_redirects=False, trust_env=False) as client:
+                with client.stream("GET", url) as response:
+                    if response.status_code != 200:
+                        raise ValueError()
+                    for part in response.iter_bytes():
+                        size += len(part)
+                        if size > assets.MAX_BYTES:
+                            raise ValueError()
+                        parts.append(part)
+            if not size:
+                raise ValueError()
+            return b"".join(parts)
+        except (ValueError, TypeError, httpx.HTTPError, OSError) as exc:
+            raise AgentError("IMAGE_OUTPUT_INVALID", "图片下载失败或返回内容不合法；已保留本次调用记录，不会自动重新生图", 502) from exc
 
     def _reference_images(self, images):
         if self.image_reference_format != "single":

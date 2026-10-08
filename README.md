@@ -110,3 +110,9 @@ CMS 的 `version` 字段为字符串（如 `v1`），设计端发送时必须转
 
 ### CMS需求自动同步
 设计首页自动读取当前空间已批准证据包，无需手填编号；点“用这个需求开始设计”自动关联并保存快照。空列表时先到CMS批准需求，返回设计页会更新。分页、网络重试与审批权限测试：` .venv/bin/python -m pytest tests/test_cms.py -q `；前端执行 `npm test`。接口及验收见 `docs/cms-auto-import.md`。
+
+## 图片服务返回 URL 的配置
+
+部分图片服务会忽略 `response_format=b64_json` 并返回 URL。仅在确认服务图片域名后，设置 `AGENT_IMAGE_DOWNLOAD_HOSTS`（逗号分隔的精确域名）。默认禁用 URL 下载，不发送模型密钥、不跟随重定向，图片仍需通过格式检查并保存到持久化目录。接口契约与验收见 [图片接口兼容说明](docs/image-provider-compatibility.md)。
+
+当前线上入口（2026-10-08 恢复）：https://s357brv8j8f9gdhvbu9a9.apigateway-cn-beijing.volceapi.com/design/ 。免注册直接体验，记录按浏览器访客空间隔离。旧域名已停用。
