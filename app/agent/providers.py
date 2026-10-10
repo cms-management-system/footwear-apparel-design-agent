@@ -67,6 +67,9 @@ def _primary_reference(images):
 class Provider:
     def __init__(self):
         cfg = get_config()
+        self.text_url = os.getenv("MODEL_BASE_URL", "")
+        self.text_model = os.getenv("MODEL_ID", "")
+        self.text_key = os.getenv("MODEL_API_KEY", "")
         self.vision_url = os.getenv("AGENT_VISION_BASE_URL", "")
         self.vision_model = os.getenv("AGENT_VISION_MODEL", "")
         self.vision_key = os.getenv("AGENT_VISION_API_KEY", "")
@@ -89,6 +92,13 @@ class Provider:
             return 0
 
     def capabilities(self):
+        text = bool(
+            self.enabled
+            and self.text_model
+            and self.text_key
+            and self.text_url
+            and self.reasoning_fen
+        )
         vision = bool(
             self.enabled
             and self.vision_model
@@ -104,11 +114,13 @@ class Provider:
             and self.image_fen
         )
         return {
-            "understand": vision,
+            "understand": text or vision,
             "design": render,
             "vision_service": urlparse(self.vision_url).hostname or "尚未配置视觉服务",
+            "text_service": urlparse(self.text_url).hostname or "尚未配置文字模型服务",
             "image_service": urlparse(self.image_url).hostname or "尚未配置图片服务",
             "vision_model": self.vision_model,
+            "text_model": self.text_model,
             "vision_thinking": self.vision_thinking,
             "image_model": self.image_model,
             "reasoning_call_max_fen": self.reasoning_fen,
@@ -127,7 +139,11 @@ class Provider:
     def _post(url, key, payload, on_preview=None):
         try:
             # Construction is within the protected block. No hidden HTTP/SDK retries.
-            with httpx.Client(timeout=httpx.Timeout(150, connect=15), follow_redirects=False) as client:
+            with httpx.Client(
+                timeout=httpx.Timeout(150, connect=15),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as res:
                     if res.status_code >= 400:
                         # Interpret only an allowlisted vendor code, never surface its body.
@@ -192,6 +208,10 @@ class Provider:
 
     def structured(self, prompt, context, schema, images=()):
         self.require("understand")
+        use_vision = bool(images) or not (self.text_url and self.text_model and self.text_key)
+        service_url = self.vision_url if use_vision else self.text_url
+        service_key = self.vision_key if use_vision else self.text_key
+        service_model = self.vision_model if use_vision else self.text_model
         content = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
         for label, payload in images:
             content += [
@@ -203,16 +223,16 @@ class Provider:
         self.last_receipt = {}
         preview = getattr(self, "on_preview", None)
         result = self._post(
-            self.vision_url.rstrip("/") + "/chat/completions",
-            self.vision_key,
+            service_url.rstrip("/") + "/chat/completions",
+            service_key,
             {
-                "model": self.vision_model,
+                "model": service_model,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
                 "max_tokens": 4096,
                 "response_format": {"type": "json_object"},
                 "temperature": 0.2,
                 **({"stream": True, "stream_options": {"include_usage": True}} if preview else {}),
-                **({"thinking": {"type": self.vision_thinking}} if self.vision_thinking else {}),
+                **({"thinking": {"type": self.vision_thinking}} if use_vision and self.vision_thinking else {}),
             },
             **({"on_preview": preview} if preview else {}),
         )

@@ -264,7 +264,6 @@ export default function DesignChat() {
         </details>}
         {!!projects.length && <details ref={historyRef} id="history" className={styles.projectPicker}><summary>历史对话</summary><select aria-label="选择设计对话" value={pid ?? ""} disabled={busy || detailsBusy} onChange={e => choose(Number(e.target.value))}><option disabled value="">选择一份设计</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></details>}
         {current && !revisionBase && <button ref={detailsTrigger} aria-expanded={detailsOpen} aria-controls="design-details" onClick={toggleDetails}>{detailsOpen ? "收起细节" : stylePlan ? "修改原始需求" : "查看或调整细节"}</button>}
-        {pid && <button disabled={busy || detailsBusy} onClick={() => choose(null)}>＋ 新对话</button>}
       </div>
     </div>
     {connection && <p role="status" className={styles.muted}>{connection}</p>}

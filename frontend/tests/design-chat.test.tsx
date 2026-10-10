@@ -404,6 +404,7 @@ it("选定图片后从独立方案页按需补充打样资料", async () => {
   expect(screen.queryByRole("img", { name: "正面结构示意图" })).toBeNull();
   expect(screen.getByRole("region", { name: "技术平面图草稿" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "生成草图" })).toBeTruthy();
+  expect(screen.getByText(/确认上方草图后，正面 SVG 会加入沟通包/)).toBeTruthy();
   fireEvent.click(within(panel).getByRole("button", { name: "自己补充细节" }));
   fireEvent.change(within(panel).getByLabelText(/面料与辅料/), { target: { value: "全棉面料，克重待核对" } });
   fireEvent.click(within(panel).getByRole("button", { name: "保存打样资料草稿" }));
