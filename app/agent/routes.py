@@ -9,7 +9,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.routing import APIRoute
 from sqlalchemy import select
 
-from ..models import Project
+from ..config import get_config
+from ..models import DesignProjectAccess, Project
 from . import assets, chat, cms, events, models3d, sample_pack, service, style, technical_flat
 from .providers import Provider
 from .schemas import (
@@ -70,9 +71,24 @@ def capabilities() -> dict:
 
 
 @router.get("/design-projects")
-def projects() -> dict:
+def projects(request: Request) -> dict:
     with transaction() as db:
         rows = db.scalars(select(Record).where(Record.kind == "head").order_by(Record.created_at.desc()))
+        user = getattr(request.state, "design_user", None)
+        if get_config().design_auth_required and user:
+            if user.role == "manager":
+                return {"items": []}
+            allowed = {
+                r.project_id
+                for r in db.scalars(select(DesignProjectAccess).where(DesignProjectAccess.username == user.username))
+            }
+            return {
+                "items": [
+                    {"id": r.project_id, "name": db.get(Project, r.project_id).name}
+                    for r in rows
+                    if r.project_id in allowed
+                ]
+            }
         return {"items": [{"id": r.project_id, "name": db.get(Project, r.project_id).name} for r in rows]}
 
 
@@ -281,9 +297,12 @@ def delivery(id: str):
             if sheet:
                 fields = sheet.payload["fields"]
                 labels = [
-                    ("面料与辅料", "material"), ("颜色与色号", "color"),
-                    ("尺码与关键尺寸", "measurements"), ("图案或装饰位置", "graphic_placement"),
-                    ("图案或装饰尺寸", "graphic_dimensions"), ("制作工艺", "construction"),
+                    ("面料与辅料", "material"),
+                    ("颜色与色号", "color"),
+                    ("尺码与关键尺寸", "measurements"),
+                    ("图案或装饰位置", "graphic_placement"),
+                    ("图案或装饰尺寸", "graphic_dimensions"),
+                    ("制作工艺", "construction"),
                     ("其他打样说明", "notes"),
                 ]
                 notice = "打样准备草稿；未填写项目和实物指标须由设计师及打样方核对，不等于可直接生产的工艺单。"
