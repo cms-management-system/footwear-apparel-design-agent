@@ -242,6 +242,8 @@ def dispatch(db, reservation, run, cost):
     if count > cap["max_calls"] or total > cap["max_cost_fen"]:
         raise AgentError("BUDGET_EXHAUSTED", "阶段费用或次数已超出授权；未出网", 409)
     acquire_slot(db, reservation.payload["attempt_id"])
+    from .public_budget import reserve_dispatch
+    reserve_dispatch(db, reservation.stage, reservation.payload["attempt_id"], run.id)
     reservation.status = "sent"
     reservation.payload = {**reservation.payload, "sent_at": now()}
 

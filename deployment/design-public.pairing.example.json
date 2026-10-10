@@ -1,0 +1,30 @@
+{
+  "design_instance_id": "design-public-20261010",
+  "product_instance_id": "product-public-20261010",
+  "authorized_scope": "public-three-agent-20261010",
+  "product_base_url": "http://127.0.0.1:8291",
+  "package_reader": {
+    "subject": "design-public-package-reader",
+    "token": "",
+    "purpose": "design_package_reader",
+    "source_instance_id": "design-public-20261010",
+    "target_instance_id": "product-public-20261010",
+    "authorized_scope": "public-three-agent-20261010"
+  },
+  "event_writer": {
+    "subject": "design-public-event-writer",
+    "token": "",
+    "purpose": "design_event_writer",
+    "source_instance_id": "design-public-20261010",
+    "target_instance_id": "product-public-20261010",
+    "authorized_scope": "public-three-agent-20261010"
+  },
+  "asset_reader": {
+    "subject": "product-public-asset-reader",
+    "token": "",
+    "purpose": "design_asset_reader",
+    "source_instance_id": "product-public-20261010",
+    "target_instance_id": "design-public-20261010",
+    "authorized_scope": "public-three-agent-20261010"
+  }
+}

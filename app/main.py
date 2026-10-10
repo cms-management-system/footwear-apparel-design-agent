@@ -108,6 +108,12 @@ async def managed_access(request: Request, call_next):
         response.headers["Access-Control-Allow-Headers"] = request.headers.get(
             "access-control-request-headers", "Content-Type")
         return finish(response)
+    if cfg.public_demo and path != "/api/health" and not path.startswith("/api/design-integration/"):
+        from .design_demo_access import access_origin_guard
+        try:
+            access_origin_guard(request)
+        except AgentError as exc:
+            return finish(_error(exc.status, exc.code, exc.message))
     if cfg.design_demo_access_enabled:
         if path in {"/api/design-auth/login", "/api/design-auth/register"}:
             response = _error(409, "DEMO_LOGIN_FROZEN", "演示期间账号登录与注册暂停，请直接进入演示角色入口")
@@ -194,6 +200,10 @@ def startup() -> None:
     migrate()
     from .design_demo_access import initialize
     initialize()
+    from .agent.public_budget import initialize as initialize_public_budget
+    with session() as db:
+        initialize_public_budget(db)
+        db.commit()
     seed_manager()
     if get_config().managed:
         from .agent.managed_bridge import recover_inflight

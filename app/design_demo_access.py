@@ -8,6 +8,7 @@ import os
 import secrets
 import stat
 import time
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from sqlalchemy import select
@@ -146,9 +147,32 @@ def session_for_request(db, request):
 
 
 def _local_request(request):
+    cfg = get_config()
+    if cfg.public_demo:
+        access_origin_guard(request)
+        return
     host = request.url.hostname or ""
     if host not in {"localhost", "127.0.0.1", "::1"} and not host.endswith(".localhost"):
         raise error("DEMO_LOCAL_ONLY", "演示访问仅允许本机入口", 403)
+
+
+def access_origin_guard(request):
+    """Exact public authority or fixed headers from the actual loopback proxy peer."""
+    cfg = get_config()
+    origin = request.headers.get("origin")
+    if origin is not None and origin != cfg.design_public_origin:
+        raise error("ORIGIN_FORBIDDEN", "请求来源未获允许", 403)
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and origin != cfg.design_public_origin:
+        raise error("ORIGIN_FORBIDDEN", "公网写入必须来自当前HTTPS演示入口", 403)
+    public = urlsplit(cfg.design_public_origin)
+    direct = request.url.scheme == "https" and request.url.netloc == public.netloc
+    forwarded = bool(
+        request.client and request.client.host in {"127.0.0.1", "::1"}
+        and request.headers.get("x-forwarded-host") == public.netloc
+        and request.headers.get("x-forwarded-proto") == "https"
+    )
+    if not (direct or forwarded):
+        raise error("DEMO_PUBLIC_ORIGIN_REQUIRED", "请从已配置的HTTPS演示入口访问", 403)
 
 
 def bootstrap(request: Request, role=None):
@@ -250,7 +274,7 @@ def bootstrap(request: Request, role=None):
 def apply_cookies(request, response):
     cfg = get_config()
     for name, value in getattr(request.state, "design_demo_cookies", {}).items():
-        response.set_cookie(name, value, httponly=True, samesite="strict", path="/",
+        response.set_cookie(name, value, httponly=True, samesite="strict", path=cfg.design_cookie_path,
                             secure=cfg.design_session_cookie_secure,
                             max_age=365 * 24 * 3600 if name.endswith("_chain") else TTL)
 
@@ -317,5 +341,6 @@ def logout(request, response):
                                 run.status = "blocked"
                                 run.payload = {**run.payload, "blocked_reason": "DEMO_SESSION_ENDED"}
                 db.commit()
-    response.delete_cookie(cfg.design_demo_cookie, path="/")
+    response.delete_cookie(cfg.design_demo_cookie, path=cfg.design_cookie_path,
+                           secure=cfg.design_session_cookie_secure, httponly=True, samesite="strict")
     return {"ok": True, "access_mode": "demo", "demo_entry_urls": ENTRIES}

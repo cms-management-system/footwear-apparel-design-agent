@@ -156,6 +156,10 @@ def capabilities(db, pid, user, provider, creation_action=None):
             else "BUDGET_EXHAUSTED"
         )
         available[stage], reasons[stage] = reason == "ready", reason
+        from .public_budget import remaining as public_remaining
+        public_left = public_remaining(db, stage)
+        if public_left is not None and public_left <= 0:
+            available[stage], reasons[stage] = False, "PUBLIC_BUDGET_EXHAUSTED"
         if available[stage] and binding_finished:
             available[stage], reasons[stage] = False, "GRANT_BINDING_CONFLICT"
         if available[stage] and quota.busy(db):
@@ -191,6 +195,7 @@ def capabilities(db, pid, user, provider, creation_action=None):
         "remaining": {
             f"{x}_calls": min(
                 quota.remaining(db, g, x) if permitted else 0,
+                public_remaining(db, x) if public_remaining(db, x) is not None else 100,
                 max(0, ctx.payload["limits"][x] - interactive.validation_count(db, ctx, x))
                 if ctx and ctx.purpose == "validation"
                 else 100,
@@ -824,6 +829,7 @@ def finish_error(task_id, error, receipt=None):
                 "BUDGET_EXHAUSTED",
                 "CALL_LIMIT_EXHAUSTED",
                 "PROVIDER_BUSY",
+                "PUBLIC_BUDGET_EXHAUSTED",
                 "ROLE_FORBIDDEN",
                 "NOT_FOUND",
             }

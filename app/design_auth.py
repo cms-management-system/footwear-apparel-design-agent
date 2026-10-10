@@ -154,7 +154,7 @@ def _start_session(db, response: Response, username: str, *, request=None) -> No
     cfg = get_config()
     response.set_cookie(
         cfg.design_session_cookie, token, httponly=True, samesite="strict",
-        secure=cfg.design_session_cookie_secure, path="/", max_age=12 * 3600,
+        secure=cfg.design_session_cookie_secure, path=cfg.design_cookie_path, max_age=12 * 3600,
     )
 
 
@@ -193,7 +193,7 @@ def logout(request: Request, response: Response):
             if record:
                 db.delete(record)
                 db.commit()
-    response.delete_cookie(cookie, path="/")
+    response.delete_cookie(cookie, path=get_config().design_cookie_path)
     return {"ok": True}
 
 

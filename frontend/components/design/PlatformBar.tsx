@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { appRelativePath } from "@/lib/app-path";
 
 function SeriesMark() {
   return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 2 9 5v10l-9 5-9-5V7l9-5Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" /><path d="m3.5 7.5 8.5 5 8.5-5M12 12.5v9M7.5 5l9 5v5" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" /></svg>;
@@ -19,7 +20,7 @@ const siblingLinks = [
 ].filter((link): link is { label: string; href: string } => Boolean(link.href));
 
 export default function PlatformBar() {
-  const pathname = usePathname();
+  const pathname = appRelativePath(usePathname());
   const minimal = pathname === "/login" || pathname === "/register";
   const canvas = /^\/projects\/[^/]+$/.test(pathname);
   const creative = canvas || pathname === "/";

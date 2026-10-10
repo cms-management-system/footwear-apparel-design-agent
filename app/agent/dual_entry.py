@@ -362,6 +362,8 @@ def image_capability(db, pid=None, user=None):
     from . import execution_quota, interactive_policy
 
     p, ctx = interactive_policy.preview(db, user)
+    from .public_budget import remaining as public_remaining
+    public_left = public_remaining(db, "image")
     if ctx and ctx.purpose == "validation":
         return {
             "available": False,
@@ -381,6 +383,7 @@ def image_capability(db, pid=None, user=None):
                 pass
         ready = (
             manual_upstream
+            and (public_left is None or public_left > 0)
             and configured
             and 0 < provider.image_fen <= p["per_intent"]["image"]["max_cost_fen"]
             and not interactive_policy.subject_busy(db, user.username)
@@ -388,7 +391,8 @@ def image_capability(db, pid=None, user=None):
         )
         return {
             "available": ready,
-            "reason": "ready" if ready else "CREATION_AUTHORIZATION_REQUIRED",
+            "reason": "PUBLIC_BUDGET_EXHAUSTED" if public_left == 0 else
+                      "ready" if ready else "CREATION_AUTHORIZATION_REQUIRED",
             "remaining": 1 if ready else 0,
             "single_image": True,
             "concurrency": 1,

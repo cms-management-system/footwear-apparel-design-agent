@@ -210,6 +210,9 @@ def allocate(db, run, user, action_id, provider, text, *, manual_image=False):
         "image": dict(p["per_intent"]["image"]) if image_allowed else {"max_calls": 0, "max_cost_fen": 0},
     }
     for stage, cost in [("text", provider.reasoning_fen), ("image", provider.image_fen)]:
+        from .public_budget import check_available
+        if stages[stage]["max_calls"]:
+            check_available(db, stage)
         if stages[stage]["max_calls"] and (cost <= 0 or cost > stages[stage]["max_cost_fen"]):
             raise AgentError("BUDGET_EXHAUSTED", "本机策略不能覆盖本阶段费用预留", 409)
     grant_id = "interactive_" + sha256(
@@ -292,6 +295,9 @@ def current_grant(db, run):
 
 
 def guard_legacy(db, actor=None, context=None, *, worker=False, manual_image=False):
+    from .public_budget import active
+    if active(db) and (worker or not manual_image or not valid_policy(db)):
+        raise AgentError("CREATION_AUTHORIZATION_REQUIRED", "公网旧收费入口未授有界派发，只能使用当前明确创作动作", 409)
     if context is None:
         session = authenticated_session(db)
         context = session_context(session.token_hash) if session else None

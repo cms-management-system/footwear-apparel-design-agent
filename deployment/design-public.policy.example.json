@@ -1,0 +1,21 @@
+{
+  "policy_id": "public_design_interactive_v1",
+  "mode": "interactive_local",
+  "enabled": true,
+  "scope_id": "public-three-agent-20261010",
+  "target_instance_id": "design-public-20261010",
+  "allowed_roles": [
+    "designer"
+  ],
+  "max_active_runs_per_subject": 1,
+  "per_intent": {
+    "text": {
+      "max_calls": 1,
+      "max_cost_fen": 50
+    },
+    "image": {
+      "max_calls": 1,
+      "max_cost_fen": 50
+    }
+  }
+}

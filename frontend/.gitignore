@@ -14,3 +14,6 @@
 .env
 .env.*
 !.env.example
+
+!.env.public.example
+.next-public-design/

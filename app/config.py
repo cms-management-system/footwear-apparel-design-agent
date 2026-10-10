@@ -100,10 +100,35 @@ class Config:
         self.design_demo_designer_username = os.environ.get("DESIGN_DEMO_DESIGNER_USERNAME", "design-employee-a")
         self.design_demo_cookie = self.design_session_cookie + "_demo"
         self.design_demo_chain_cookie = self.design_session_cookie + "_demo_chain"
+        self.design_demo_deployment_mode = os.environ.get("DESIGN_DEMO_DEPLOYMENT_MODE", "local")
+        if self.design_demo_deployment_mode not in {"local", "public_demo"}:
+            raise ValueError("DESIGN_DEMO_DEPLOYMENT_MODE must be local or public_demo")
+        self.public_demo = self.design_demo_deployment_mode == "public_demo"
+        self.design_public_origin = os.environ.get("DESIGN_PUBLIC_ORIGIN", "").strip()
+        self.design_cookie_path = os.environ.get("DESIGN_COOKIE_PATH", "/")
+        if not re.fullmatch(r"/[A-Za-z0-9/_-]*", self.design_cookie_path) or "//" in self.design_cookie_path:
+            raise ValueError("Invalid DESIGN_COOKIE_PATH")
+        if self.public_demo:
+            parsed = urlsplit(self.design_public_origin)
+            if (not self.managed or parsed.scheme != "https" or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or "*" in self.design_public_origin
+                    or self.design_allowed_origins != (self.design_public_origin,)
+                    or not self.design_session_cookie_secure or self.design_cookie_path != "/v2/design"
+                    or self.design_instance_id != "design-public-20261010"
+                    or self.design_scope_id != "public-three-agent-20261010"):
+                raise ValueError(
+                    "Public demo requires its exact HTTPS origin, Secure cookie, prefix and public identity"
+                )
+            _ = parsed.port
+        self.design_public_text_limit = int(os.environ.get("DESIGN_PUBLIC_TEXT_CALL_LIMIT", "20"))
+        self.design_public_image_limit = int(os.environ.get("DESIGN_PUBLIC_IMAGE_CALL_LIMIT", "4"))
+        if not all(0 <= n <= 100000 for n in (self.design_public_text_limit, self.design_public_image_limit)):
+            raise ValueError("Invalid public cumulative call limits")
         if self.design_demo_access_enabled:
             if not self.managed:
                 raise ValueError("Demo access requires managed mode")
-            for origin in self.design_allowed_origins:
+            for origin in self.design_allowed_origins if not self.public_demo else ():
                 host = urlsplit(origin).hostname
                 if host not in {"localhost", "127.0.0.1", "::1"} and not host.endswith(".localhost"):
                     raise ValueError("Demo access requires exact loopback origins")

@@ -308,7 +308,10 @@ def cms_response(pid: int, data: cms.CmsResponseIn) -> dict:
 
 @router.get("/design-agent/capabilities")
 def capabilities(project_id: int | None = None) -> dict:
+    from .public_budget import projection
+
     with transaction() as db:
+        public_budget = projection(db)
         user = validate_transaction_access(db)
         image_only = dual_entry.image_capability(db, project_id, user) if get_config().managed else None
         direct = direct_create.capabilities(db, project_id, user, Provider()) if get_config().managed else None
@@ -317,6 +320,7 @@ def capabilities(project_id: int | None = None) -> dict:
         "three_d": models3d.capabilities(),
         "image_only_execution": image_only,
         "direct_creation": direct,
+        "public_execution_budget": public_budget,
     }
 
 

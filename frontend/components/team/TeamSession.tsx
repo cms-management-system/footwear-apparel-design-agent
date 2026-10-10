@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ApiError, bindDesignContext, DESIGN_SESSION_INVALIDATED_EVENT, errorText, isAbort, teamApi, userIdentity, type TeamUser } from "@/lib/team-api";
-import { appPath } from "@/lib/app-path";
+import { appRelativePath } from "@/lib/app-path";
 import { demoRole, navigateTeamWorkspace, resolveDemoRole } from "@/lib/demo-access";
 import demoStyle from "./demo-session.module.css";
 import s from "@/app/handoffs/handoff.module.css";
@@ -41,7 +41,7 @@ export function TeamBoundary({ children }: { children: (user: TeamUser) => React
         }
         if (switched) { announceSessionChange(); return; }
       }
-      if (next.access_mode === "demo" && next.role === "manager" && window.location.pathname === appPath("/")) {
+      if (next.access_mode === "demo" && next.role === "manager" && appRelativePath(window.location.pathname) === "/") {
         navigateTeamWorkspace("manager"); return;
       }
       if (run === generation.current && !controller.signal.aborted) { bindDesignContext(next.auth_context_id ?? null, next); setUser(next); }

@@ -222,3 +222,20 @@ class InteractiveGrant(ManagedBase):
     project_id: Mapped[int] = mapped_column(Integer)
     payload: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[str] = mapped_column(String(40), default=utc_now)
+
+
+class PublicExecutionBudget(ManagedBase):
+    __tablename__ = "design_public_execution_budget"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(160))
+    instance_id: Mapped[str] = mapped_column(String(160))
+    text_limit: Mapped[int] = mapped_column(Integer)
+    image_limit: Mapped[int] = mapped_column(Integer)
+
+
+class PublicProviderCall(ManagedBase):
+    __tablename__ = "design_public_provider_call"
+    attempt_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(20))
+    run_id: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[str] = mapped_column(String(40), default=utc_now)
