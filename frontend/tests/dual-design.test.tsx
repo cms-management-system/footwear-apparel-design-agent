@@ -1,0 +1,84 @@
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import PromptComposer from "@/components/design/PromptComposer";
+import DesignChat from "@/components/design/DesignChat";
+import { agentApi, type Capabilities, type DesignPrompt, type Workspace } from "@/lib/agent-api";
+import { bindDesignContext, type TeamUser } from "@/lib/team-api";
+import { createDesignAction, executeCreateAction, queryCreateAction } from "@/lib/design-projects";
+vi.mock("@/lib/agent-api", async original => {
+  const actual = await original<typeof import("@/lib/agent-api")>();
+  return { ...actual, agentApi: { ...actual.agentApi, capabilities: vi.fn(), workspace: vi.fn(), projects: vi.fn(), savePrompt: vi.fn(), textToImage: vi.fn() } };
+});
+const user: TeamUser = { username: "designer-test", display_name: "合成员工", role: "designer", integration_mode: "managed", auth_context_id: "dual-context", instance_id: "dual-design", scope_id: "dual-scope" };
+const prompt = (): DesignPrompt => ({ id: "prompt-1", project_id: 8, positive_prompt: "合成短外套，保留方领", avoid_items: ["不增加标志"], output_kind: "effect_image", design_object: "外套", base_version_id: null, edit_region: "", source_mode: "independent", derived_from_prompt_id: null, created_by: user.username, created_at: "test", digest: "test-digest" });
+const workspace = (): Workspace => ({ project: { id: 8, name: "合成自主设计" }, project_context: { project_id: 8, source_mode: "independent", owner_subject: user.username, scope_id: user.scope_id!, revision: 1, status: "draft", allowed_actions: ["save_prompt", "generate_image"] }, source_binding: null, revision: 1, prompts: [prompt()], current_prompt_id: "prompt-1", head: {}, specs: [], tasks: [], versions: [], assets: [] });
+const caps: Capabilities = { understand: false, design: false, vision_service: "off", image_service: "off", quality_status: "未验", note: "", monthly_allocation_fen: 0, image_only_execution: { available: true, remaining: 1, reason: "ready" } };
+const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+beforeEach(() => { vi.clearAllMocks(); bindDesignContext(user.auth_context_id!, user); sessionStorage.clear(); vi.mocked(agentApi.capabilities).mockResolvedValue(caps); vi.mocked(agentApi.projects).mockResolvedValue({ items: [] }); window.history.replaceState(null, "", "/"); vi.stubGlobal("scrollTo", vi.fn()); });
+afterEach(() => { cleanup(); bindDesignContext(null); vi.unstubAllGlobals(); });
+it("员工首页提供显著创建设计入口，不自动创建或生成", async () => {
+  render(<DesignChat canCreate />);
+  expect(await screen.findByRole("heading", { name: "从一个设计想法开始" })).toBeTruthy();
+  expect(screen.getAllByRole("link", { name: "＋ 创建设计" }).every(link => link.getAttribute("href") === "/new")).toBe(true);
+  expect(agentApi.textToImage).not.toHaveBeenCalled();
+});
+it("关闭文字模型不阻断已授权单张图片，明确点击一次才发生成", async () => {
+  vi.mocked(agentApi.textToImage).mockResolvedValue({ task_id: "image-1", project_id: 8, prompt_id: "prompt-1", status: "queued", revision: 2 });
+  const refresh = vi.fn(async () => undefined);
+  render(<PromptComposer workspace={workspace()} readOnly={false} onSaved={refresh} onDirtyChange={vi.fn()} />);
+  const button = await screen.findByRole("button", { name: "生成一张设计图" });
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  expect(agentApi.textToImage).not.toHaveBeenCalled();
+  fireEvent.click(button);
+  await screen.findByText(/已受理一张图，任务 image-1/);
+  expect(agentApi.textToImage).toHaveBeenCalledWith(8, "prompt-1");
+  expect(agentApi.textToImage).toHaveBeenCalledTimes(1);
+});
+it("配额不匹配或任务unknown时不能换key出图，刷新只读", async () => {
+  const data = workspace(); data.image_only_execution = { available: false, remaining: 0, reason: "IMAGE_AUTHORIZATION_REQUIRED" };
+  const refresh = vi.fn(async () => undefined);
+  const view = render(<PromptComposer workspace={data} readOnly={false} onSaved={refresh} onDirtyChange={vi.fn()} />);
+  expect((screen.getByRole("button", { name: "生成一张设计图" }) as HTMLButtonElement).disabled).toBe(true);
+  await screen.findByText(/当前项目尚未获得图片生成授权/);
+  expect(agentApi.textToImage).not.toHaveBeenCalled();
+  data.image_only_execution = { available: true, remaining: 1, reason: "ready" };
+  data.tasks = [{ id: "unknown-original-task", mode: "image_only", status: "interrupted", outcome: "unknown", questions: [], reasoning_calls: 0, image_calls: 1, reserved_cost_fen: 50, max_cost_fen: null, steps: [], observations: [] }];
+  view.rerender(<PromptComposer workspace={data} readOnly={false} onSaved={refresh} onDirtyChange={vi.fn()} />);
+  expect((screen.getByRole("button", { name: "生成一张设计图" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "读取原任务进度" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  expect(agentApi.textToImage).not.toHaveBeenCalled();
+});
+it("长自然语言保存失败保留正文与避免项，不进入生成", async () => {
+  vi.mocked(agentApi.savePrompt).mockRejectedValue(new Error("上游硬约束冲突"));
+  const data = workspace(); data.project_context!.source_mode = "upstream";
+  render(<PromptComposer workspace={data} readOnly={false} onSaved={async () => undefined} onDirtyChange={vi.fn()} />);
+  const long = "保留方领，修改裙摆。".repeat(600);
+  fireEvent.change(screen.getByRole("textbox", { name: "本轮完整设计描述" }), { target: { value: long } });
+  fireEvent.click(screen.getByRole("button", { name: "保存执行提示词" }));
+  await screen.findByRole("alert");
+  expect((screen.getByRole("textbox", { name: "本轮完整设计描述" }) as HTMLTextAreaElement).value).toBe(long);
+  expect(agentApi.savePrompt).toHaveBeenCalledWith(8, expect.objectContaining({ positive_prompt: long, avoid_items: ["不增加标志"] }));
+  expect(agentApi.textToImage).not.toHaveBeenCalled();
+});
+it("自主项目不挂上游来源标签，管理者只读完整执行稿", async () => {
+  vi.mocked(agentApi.workspace).mockResolvedValue(workspace());
+  window.history.replaceState(null, "", "/?project=8");
+  render(<DesignChat readOnly />);
+  await screen.findByRole("textbox", { name: "本轮完整设计描述" });
+  expect(screen.queryByText("查看完整上游需求与设计提示词")).toBeNull();
+  expect(screen.queryByRole("button", { name: "生成一张设计图" })).toBeNull();
+});
+it("自主创建冻结无revision原动作，换会话不能重写但本人可查归属", async () => {
+  const action = createDesignAction(user, { title: "合成", design_object: "外套", initial_prompt: "自然语言", output_kind: "effect_image" });
+  const result = { project_id: 8, source_mode: "independent", owner_subject: user.username, scope_id: user.scope_id, revision: 1, prompt: prompt(), allowed_actions: [] };
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(response(result, 201)); vi.stubGlobal("fetch", fetchMock);
+  await executeCreateAction(action, user);
+  expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("X-Design-Revision")).toBe(false);
+  const next = { ...user, auth_context_id: "new-context" };
+  await expect(executeCreateAction(action, next)).rejects.toMatchObject({ code: "AUTH_CONTEXT_CHANGED" });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  fetchMock.mockResolvedValueOnce(response({ action_id: action.id, method: "POST", status_code: 201, path: "/api/design-projects", result }));
+  await queryCreateAction(action, next);
+  expect(fetchMock.mock.calls[1][1]?.method).toBeUndefined();
+});

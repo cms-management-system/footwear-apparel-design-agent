@@ -1,0 +1,19 @@
+[Unit]
+Description=Public footwear design demo backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=contest
+Group=contest
+WorkingDirectory=/srv/contest/releases/RELEASE/design
+ExecStart=/srv/contest/releases/RELEASE/design/.venv/bin/python scripts/public_design_runtime.py --env-json /srv/contest/secrets/three-agent-public-20261010/design-runtime-env.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

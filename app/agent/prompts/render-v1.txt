@@ -8,3 +8,5 @@
 若设计要求包含 design_direction，当前生成的是同一确认要求下的独立候选款。number/total 是款序号/总款数，explore 是本款探索侧重点，previous_directions 为已生成款的检查摘要。仅在 may_change 或尚未固定的设计细节上体现不同方案，不改变 must_keep、forbidden、参考用途和局部编辑边界。如果侧重点涉及锁定部位，改用其他允许变化的细节；不要为了不同而违反要求，也不要把多款拼成一张图。
 
 严格遵循 presentation 的同批展示规范。先按 priority 处理用户明确要求及底图，再应用统一视角、主体、背景和构图默认值。默认不展示人物/身体部位，不能一款上脚一款离脚，不能一款正面一款侧面。每款使用同一展示规范，设计差异体现在产品本身。
+
+若上下文含 product_source，这是完整且不可变的产品批准来源：同时读取 requirement 与 prompt.positive_prompt、avoid_items、design_spec、source_refs、human_additions、unknowns、conflicts 和 generation。不得把来源硬约束当偏好，或把缺证据的材料/工艺当已证实。展示默认值服从该批准规格。execution_changes 是本地执行修改及父版本记录，不代表产品经理重新审批；原来源约束仍须保留。生成 proposed_spec 时只返回要求单schema字段，不复制 product_source 或 execution_changes 到 proposed_spec。

@@ -32,9 +32,15 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-direct-20261010/types/**/*.ts",
+    ".next-direct-status-20261010/types/**/*.ts",
+    ".next-fullchain-20261010/types/**/*.ts",
+    ".next-partner-20261010/types/**/*.ts",
+    ".next-unified/types/**/*.ts",
+    ".next-workspace-20261010/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-unified/types/**/*.ts"
+    ".next-demo-access-20261010/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

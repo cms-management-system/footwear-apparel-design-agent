@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import io
+import os
 import warnings
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -50,6 +51,26 @@ def save_image(raw: bytes):
     path = root / name
     path.write_bytes(clean)
     return {"file": name, "sha256": hashlib.sha256(clean).hexdigest(), "width": width, "height": height}
+
+
+def save_original_image(raw: bytes):
+    """Validate without re-encoding; preserve the actual provider file and hash."""
+    image_bytes(raw)
+    with Image.open(io.BytesIO(raw)) as source:
+        width, height = source.size
+        mime = Image.MIME[source.format]
+    name = f"{uid()}.png"
+    root = get_config().assets_dir / "design-agent"
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = root / (name + ".pending")
+    with temporary.open("xb") as stream:
+        os.chmod(temporary, 0o600)
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, root / name)
+    return {"file": name, "sha256": hashlib.sha256(raw).hexdigest(), "width": width,
+            "height": height, "mime_type": mime, "asset_id": name[:-4]}
 
 
 def file_path(payload):

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { agentApi, blankSamplingFields, type SamplingFields, type SamplingSheet } from "@/lib/agent-api";
 import styles from "./design.module.css";
 
@@ -17,6 +17,8 @@ export default function SamplingSheetPanel({ versionId, title, sheet, locked, on
   versionId: string; title: string; sheet?: SamplingSheet; locked: boolean;
   onSaved: () => Promise<void>; onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<SamplingFields>(() => sheet?.fields ?? blankSamplingFields());
   const [baseline, setBaseline] = useState<SamplingFields>(() => sheet?.fields ?? blankSamplingFields());
@@ -38,11 +40,12 @@ export default function SamplingSheetPanel({ versionId, title, sheet, locked, on
     setSaving(true); setNotice(""); setError("");
     try {
       const generated = await agentApi.autoSamplingSheet(versionId);
+      if (!alive.current) return;
       setSheetId(generated.id); setBaseline(generated.fields); setValues(generated.fields); setBasis(generated.basis);
       setNotice("已从这款的设计要求和检查结果整理草稿。你可以直接下载，也可以补充细节。");
       try { await onSaved(); } catch { setNotice("草稿已保存，页面同步稍慢，刷新后可继续查看。"); }
-    } catch (e) { setError(e instanceof Error ? e.message : "整理失败，请重试。"); }
-    finally { setSaving(false); }
+    } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "整理失败，请重试。"); }
+    finally { if (alive.current) setSaving(false); }
   }
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -50,18 +53,19 @@ export default function SamplingSheetPanel({ versionId, title, sheet, locked, on
     setSaving(true); setNotice(""); setError("");
     try {
       const saved = await agentApi.saveSamplingSheet(versionId, values, sheetId);
+      if (!alive.current) return;
       setSheetId(saved.id); setBaseline(saved.fields); setValues(saved.fields); setBasis(saved.basis);
       setNotice("打样资料草稿已保存，可继续补充或下载核对。");
       try { await onSaved(); } catch { setNotice("打样资料已保存，页面同步稍慢，刷新后可继续查看。"); }
-    } catch (e) { setError(e instanceof Error ? e.message : "保存失败，请重试。"); }
-    finally { setSaving(false); }
+    } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "保存失败，请重试。"); }
+    finally { if (alive.current) setSaving(false); }
   }
   return <section className={styles.samplingPanel} aria-label={`${title}的打样准备`}>
     <div className={styles.samplingIntro}>
-      <div><span className={styles.eyebrow}>设计资料</span><h3>{sheetId ? "交接草稿" : "让助手先整理草稿"}</h3><p>沿用已确认的设计要求与图片检查结果。面料、准确尺寸等未知信息留待核对。</p></div>
+      <div><span className={styles.eyebrow}>设计资料</span><h3>{sheetId ? "交接草稿" : "整理已确认的设计依据"}</h3><p>沿用已确认的设计要求与图片检查结果。面料、准确尺寸等未知信息留待核对。</p></div>
       <div className={styles.samplingIntroActions}>
         {!sheetId && <button type="button" className={styles.primary} disabled={saving || locked || dirty} onClick={() => void autoDraft()}>{saving ? "正在整理…" : "自动整理草稿"}</button>}
-        <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? "收起细节" : sheetId ? "按需补充细节" : "自己补充细节"}</button>
+        <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? "收起细节" : sheetId ? locked ? "查看打样细节" : "按需补充细节" : locked ? "查看打样细节" : "自己补充细节"}</button>
       </div>
     </div>
     {sheetId && <div className={styles.samplingDigest}>
@@ -75,7 +79,7 @@ export default function SamplingSheetPanel({ versionId, title, sheet, locked, on
     {open && <form onSubmit={event => void save(event)}>
       <div className={styles.samplingGrid}>{fields.map(field => <label key={field.key} className={field.wide ? styles.samplingWide : undefined}>{field.label}
         <span className={styles.samplingHint}>{field.hint}</span>
-        <textarea value={values[field.key]} maxLength={field.key === "measurements" || field.key === "construction" || field.key === "notes" ? 3000 : 1200} rows={field.wide ? 3 : 2} disabled={saving} onChange={event => setValues(current => ({ ...current, [field.key]: event.target.value }))} />
+        <textarea value={values[field.key]} maxLength={field.key === "measurements" || field.key === "construction" || field.key === "notes" ? 3000 : 1200} rows={field.wide ? 3 : 2} disabled={saving || locked} onChange={event => setValues(current => ({ ...current, [field.key]: event.target.value }))} />
       </label>)}</div>
       <p className={styles.muted}>只补充你已经确定的信息。空白项目会在导出文件中标为“待核对”。</p>
       <div className={styles.actions}><button type="submit" className={styles.primary} disabled={saving || locked || !dirty}>{saving ? "正在保存…" : "保存打样资料草稿"}</button></div>

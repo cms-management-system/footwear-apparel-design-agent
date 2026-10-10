@@ -1,0 +1,35 @@
+"use client";
+import Link from "next/link";
+import { useEffect, useState, type FormEvent } from "react";
+import { agentApi, type ProjectEntry } from "@/lib/agent-api";
+import { storageOwner, errorText, type TeamUser } from "@/lib/team-api";
+import ProjectMenu, { ProjectOperationRecovery } from "./ProjectMenu";
+import { useDirectCreation, DirectRecovery } from "./useDirectCreation";
+import { useSendKey } from "./useSendKey";
+import s from "./workspace.module.css";
+export const ideaKey = (user: TeamUser) => `design-home-idea:${storageOwner(user)}`;
+export function ProjectCover({ project }: { project: ProjectEntry }) {
+  const [version, setVersion] = useState<string | null>(project.cover_version_id ?? null); const [failed, setFailed] = useState(false);
+  const hasCoverField = "cover_version_id" in project;
+  useEffect(() => { let active = true; if (hasCoverField) { setVersion(project.cover_version_id ?? null); return; } agentApi.workspace(project.id).then(value => { if (active) setVersion(value.head.confirmed_version_id ?? value.versions.at(-1)?.id ?? null); }).catch(() => { if (active) setVersion(null); }); return () => { active = false; }; }, [project.id, project.cover_version_id, hasCoverField]);
+  return version && !failed ? <img src={agentApi.image(version, "version")} alt={`${project.name}原设计封面`} width={480} height={360} loading="lazy" onError={() => setFailed(true)} /> : <div className={s.coverEmpty}><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="10" y="8" width="28" height="32" rx="5" /><path d="M17 18h14M17 24h10M17 30h6" /></svg><span>{failed ? "原封面暂不可读取" : "想法已保存 · 暂无图片"}</span></div>;
+}
+export function ProjectCard({ project, user, onChanged }: { project: ProjectEntry; user: TeamUser; onChanged: () => void }) {
+  const time = project.updated_at ? new Date(project.updated_at) : null;
+  return <article className={s.projectCard}><Link href={`/projects/${project.id}`} className={s.projectCardLink}><div className={s.projectCover}><ProjectCover project={project} /><span>{project.source_mode === "upstream" ? "上游定向" : project.source_mode === "independent" ? "自主设计" : "历史项目"}</span></div><div className={s.projectCardText}><h3>{project.name}</h3><p>{time && Number.isFinite(time.getTime()) ? new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }).format(time) : `项目 #${project.id}`}<span>打开 →</span></p></div></Link><ProjectMenu project={project} user={user} onChanged={onChanged} /></article>;
+}
+export default function CreationHome({ user }: { user: TeamUser }) {
+  const [idea, setIdea] = useState(""); const [kind, setKind] = useState<"effect_image" | "design_draft">("effect_image"); const [items, setItems] = useState<ProjectEntry[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [retry, setRetry] = useState(0);
+  const creation = useDirectCreation(user, input => { try { if (input.entry_mode === "idea" && JSON.parse(sessionStorage.getItem(ideaKey(user)) ?? "null")?.initial_prompt === input.text) sessionStorage.removeItem(ideaKey(user)); } catch { /* No draft persistence available. */ } });
+  const keys = useSendKey(() => void submitIdea());
+  useEffect(() => { let active = true; setLoading(true); setError(""); agentApi.projects(0, 6).then(list => { if (active) setItems(list.items); }).catch(cause => { if (active) setError(errorText(cause)); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [retry]);
+  useEffect(() => { try { const draft = JSON.parse(sessionStorage.getItem(ideaKey(user)) ?? "null"); if (typeof draft?.initial_prompt === "string") setIdea(draft.initial_prompt); if (["effect_image", "design_draft"].includes(draft?.output_kind)) setKind(draft.output_kind); } catch { /* Draft may be unavailable. */ } }, [user]);
+  function submitIdea() { if (!idea.trim() || idea.length > 4000) return; void creation.start({ entry_mode: "idea", text: idea, output_kind: kind, intent: "generate_image", authorized: true }); }
+  function start(event: FormEvent) { event.preventDefault(); submitIdea(); }
+  return <main className={s.home}><header className={s.homeHeader}><Link href="/" className={s.homeBrand}>鞋服设计 <span>DESIGN STUDIO</span></Link><div><span>{user.display_name}</span><Link href="/handoffs">{user.role === "manager" ? "管理收件与审查" : "我的上游任务"} →</Link></div></header>
+    <section className={s.creationHero}><p className={s.eyebrow}>从一句想法，到一个设计项目</p><h1>{user.role === "designer" ? "今天，想设计什么？" : "看看团队，正在创造什么。"}</h1><p className={s.heroDescription}>{user.role === "designer" ? "描述鞋服的轮廓、颜色和细节，进入画布继续创作。" : "打开授权项目查看画布与讨论，接收和审查在管理入口中完成。"}</p>
+      {user.role === "designer" && <><form className={s.homeComposer} onSubmit={start}><label className={s.srOnly} htmlFor="creation-idea">描述你的鞋服设计想法</label><textarea id="creation-idea" {...keys} disabled={creation.busy} maxLength={4000} rows={3} value={idea} onChange={e => { setIdea(e.target.value); try { sessionStorage.setItem(ideaKey(user), JSON.stringify({ initial_prompt: e.target.value, output_kind: kind })); } catch { /* Draft stays in memory. */ } }} placeholder="例如：设计一双奶白色通勤运动鞋，鞋面简洁，保留柔和的圆头…" /><div className={s.homeComposerBottom}><label>画面<select aria-label="首页画面类型" value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="effect_image">鞋服效果图</option><option value="design_draft">二维设计稿</option></select></label><button className={s.primary} disabled={creation.busy || !!creation.pending || !idea.trim() || idea.length > 4000}>{creation.busy ? "正在创建…" : "开始创作"} <span>↑</span></button></div></form><p className={s.composerHint}>Enter 开始创作 · Shift + Enter 换行 · 发送后将启动设计与图片生成</p><DirectRecovery creation={creation} user={user} /><div className={s.ideaSuggestions}><button onClick={() => { setKind("effect_image"); setIdea("设计一双适合日常通勤的鞋，"); }}>鞋款效果图</button><button onClick={() => { setKind("effect_image"); setIdea("设计一件适合日常穿着的服装，"); }}>服装效果图</button><button onClick={() => { setKind("design_draft"); setIdea("绘制一份鞋服二维设计稿，"); }}>二维设计稿</button><Link href="/projects">基于已有方案改款 →</Link></div></>}
+    </section><ProjectOperationRecovery user={user} onChanged={() => setRetry(v => v + 1)} /><section className={s.recentSection}><header><div><p className={s.eyebrow}>YOUR PROJECTS</p><h2>让想法，接着发生。</h2></div><Link href="/projects">全部项目 →</Link></header>
+      {loading ? <div className={s.homeEmpty} role="status">正在读取你的授权项目…</div> : error ? <div className={s.homeEmpty} role="alert"><p>{error}</p><button onClick={() => setRetry(v => v + 1)}>重新读取</button></div> : <div className={s.projectGrid}>{user.role === "designer" && <button type="button" className={s.newProjectCard} disabled={creation.busy || !!creation.pending} onClick={() => void creation.blank()}><span>＋</span><b>新建项目</b><p>给下一个想法，一个空间。</p></button>}{items.map(project => <ProjectCard key={project.id} project={project} user={user} onChanged={() => setRetry(v => v + 1)} />)}{!items.length && <div className={s.homeEmpty}><h3>你的第一个设计，从这里开始。</h3><p>{user.role === "designer" ? "写下想法并新建项目，或打开已分派的上游任务。" : "团队暂未建立授权项目。"}</p></div>}</div>}
+    </section></main>;
+}

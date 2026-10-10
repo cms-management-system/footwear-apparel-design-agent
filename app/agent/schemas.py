@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 class Strict(BaseModel):
@@ -10,7 +10,7 @@ class Strict(BaseModel):
 class Constraint(Strict):
     id: str = Field(pattern=r"^c_[a-zA-Z0-9_-]{1,48}$")
     kind: Literal["must_keep", "may_change", "forbidden", "preference"]
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1, max_length=2 * 1024 * 1024)
     region: str = Field(default="整体", max_length=100)
     verification: Literal["visual", "physical"] = "visual"
 
@@ -24,9 +24,9 @@ class Reference(Strict):
 
 class SpecIn(Strict):
     expected_spec_id: str | None = None
-    intent: str = Field(min_length=1, max_length=4000)
+    intent: str = Field(min_length=1, max_length=10000)
     references: list[Reference] = Field(default_factory=list, max_length=6)
-    constraints: list[Constraint] = Field(default_factory=list, max_length=30)
+    constraints: list[Constraint] = Field(default_factory=list)
     deliverables: str = Field(default="正面完整服装效果图", min_length=1, max_length=500)
     base_version_id: str | None = None
     edit_region: str = Field(default="", max_length=200)
@@ -139,7 +139,7 @@ class Finding(Strict):
 class Review(Strict):
     goal: Finding
     preservation: Finding
-    checks: list[Check] = Field(max_length=30)
+    checks: list[Check]
     summary: str = Field(min_length=1, max_length=1000)
 
 
@@ -183,10 +183,32 @@ class CorrectionIn(Strict):
     evidence: str = Field(min_length=10, max_length=1500)
 
 
+class SelectedContext(Strict):
+    version_id: str | None = Field(default=None, min_length=1, max_length=100)
+    asset_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def has_object(self):
+        if not self.version_id and not self.asset_id:
+            raise ValueError("请选择图片或版本")
+        return self
+
+
 class ChatIn(Strict):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
     text: str = Field(min_length=1, max_length=4000)
     references: list[Reference] = Field(default_factory=list, max_length=6)
     expected_spec_id: str | None = None
+    expected_prompt_id: str | None = Field(default=None, min_length=1, max_length=100)
+    selected_context: SelectedContext | None = None
     idempotency_key: str = Field(min_length=8, max_length=100)
-    authorized: bool = False
+    authorized: StrictBool = False
     max_cost_fen: int = Field(default=500, ge=1, le=20000)
+    intent: Literal["auto", "discuss", "generate_image"] = "discuss"
+    output_kind: Literal["effect_image", "design_draft"] | None = None
+
+    @model_validator(mode="after")
+    def nonblank_text(self):
+        if not self.text.strip():
+            raise ValueError("消息不可为空白")
+        return self

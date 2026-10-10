@@ -77,7 +77,7 @@ class Provider:
         self.image_size = cfg.image_size
         self.image_reference_format = cfg.image_reference_format
         self.vision_thinking = os.getenv("AGENT_VISION_THINKING", "")
-        self.enabled = os.getenv("AGENT_ENABLED", "false") == "true"
+        self.enabled = cfg.design_paid_providers_enabled and os.getenv("AGENT_ENABLED", "false") == "true"
         self.image_verified = os.getenv("AGENT_REFERENCE_IMAGES_ENABLED", "false") == "true"
         self.reasoning_fen = self._number("AGENT_REASONING_CALL_MAX_FEN")
         self.image_fen = self._number("AGENT_IMAGE_CALL_MAX_FEN")
@@ -93,14 +93,14 @@ class Provider:
 
     def capabilities(self):
         text = bool(
-            self.enabled
+            get_config().design_paid_providers_enabled and self.enabled
             and self.text_model
             and self.text_key
             and self.text_url
             and self.reasoning_fen
         )
         vision = bool(
-            self.enabled
+            get_config().design_paid_providers_enabled and self.enabled
             and self.vision_model
             and self.vision_key
             and self.vision_url
@@ -116,6 +116,8 @@ class Provider:
         return {
             "understand": text or vision,
             "design": render,
+            "image_only": bool(get_config().design_image_only_enabled
+                               and self.image_key and self.image_model and self.image_fen),
             "vision_service": urlparse(self.vision_url).hostname or "尚未配置视觉服务",
             "text_service": urlparse(self.text_url).hostname or "尚未配置文字模型服务",
             "image_service": urlparse(self.image_url).hostname or "尚未配置图片服务",
@@ -137,6 +139,11 @@ class Provider:
 
     @staticmethod
     def _post(url, key, payload, on_preview=None):
+        cfg = get_config()
+        if not cfg.design_paid_providers_enabled and not (
+            cfg.design_image_only_enabled and url.endswith("/images/generations") and on_preview is None
+        ):
+            raise AgentError("CAPABILITY_UNAVAILABLE", "本实例尚未授权收费模型调用", 503)
         try:
             # Construction is within the protected block. No hidden HTTP/SDK retries.
             with httpx.Client(
@@ -202,7 +209,8 @@ class Provider:
             usage = {}
         allowed = {"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens"}
         return {
-            "request_id": str(result.get("id", ""))[:128],
+            "request_id": result["id"][:128] if isinstance(result.get("id"), str) else "",
+            "model": result.get("model") if isinstance(result.get("model"), str) else None,
             "usage": {k: v for k, v in usage.items() if k in allowed and isinstance(v, int)},
         }
 
@@ -272,6 +280,11 @@ class Provider:
     def plan(self, context):
         return self.structured("agent-v1", context, Action)
 
+    def creation_decision(self, context, images=()):
+        from .direct_create import Decision
+
+        return self.structured("direct-v1", context, Decision, images)
+
     def plan_directions(self, context):
         return self.structured("style-v1", context, StylePlanOutput)
 
@@ -287,6 +300,13 @@ class Provider:
         prompt += "\n设计要求：" + json.dumps(spec, ensure_ascii=False)
         prompt += "\n图像顺序及用途：" + json.dumps([label for label, _ in images], ensure_ascii=False)
         prompt += "\n本轮修正依据：" + json.dumps(feedback, ensure_ascii=False)
+        return self._render_prompt(prompt, images)
+
+    def render_direct(self, prompt, images=()):
+        self.require("image_only")
+        return self._render_prompt(prompt, images)
+
+    def _render_prompt(self, prompt, images):
         payload = {
             "model": self.image_model,
             "prompt": prompt,
@@ -300,6 +320,8 @@ class Provider:
             payload["image"] = self._reference_images(images)
         result = self._post(self.image_url.rstrip("/") + "/images/generations", self.image_key, payload)
         self.last_receipt = self.receipt(result)
+        self.last_receipt.update(model=result.get("model") if isinstance(result.get("model"), str) else None,
+                                 actual_cost_fen=None)
         try:
             data = result["data"]
             if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
@@ -313,11 +335,15 @@ class Provider:
     @staticmethod
     def _download_image(url):
         """Download only from explicitly configured image hosts, without model credentials."""
+        if not (get_config().design_paid_providers_enabled or get_config().design_image_only_enabled):
+            raise AgentError("CAPABILITY_UNAVAILABLE", "本实例尚未授权外部图片服务调用", 503)
         try:
             if not isinstance(url, str):
                 raise ValueError()
             parsed = urlparse(url)
-            allowed = {host.strip().lower() for host in os.getenv("AGENT_IMAGE_DOWNLOAD_HOSTS", "").split(",") if host.strip()}
+            allowed = {
+                host.strip().lower() for host in os.getenv("AGENT_IMAGE_DOWNLOAD_HOSTS", "").split(",") if host.strip()
+            }
             if (parsed.scheme != "https" or parsed.hostname not in allowed
                     or parsed.username is not None or parsed.password is not None
                     or parsed.port not in (None, 443)):
@@ -336,7 +362,9 @@ class Provider:
                 raise ValueError()
             return b"".join(parts)
         except (ValueError, TypeError, httpx.HTTPError, OSError) as exc:
-            raise AgentError("IMAGE_OUTPUT_INVALID", "图片下载失败或返回内容不合法；已保留本次调用记录，不会自动重新生图", 502) from exc
+            raise AgentError(
+                "IMAGE_OUTPUT_INVALID", "图片下载失败或返回内容不合法；已保留本次调用记录，不会自动重新生图", 502
+            ) from exc
 
     def _reference_images(self, images):
         if self.image_reference_format != "single":
