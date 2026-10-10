@@ -1,8 +1,12 @@
 import io
 import json
+import re
+import uuid
 import zipfile
 from pathlib import Path
+from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -10,8 +14,23 @@ from fastapi.routing import APIRoute
 from sqlalchemy import select
 
 from ..config import get_config
-from ..models import DesignProjectAccess, Project
-from . import assets, chat, cms, events, models3d, sample_pack, service, style, technical_flat
+from ..models import DesignProjectAccess, Project, session
+from . import (
+    assets,
+    chat,
+    cms,
+    direct_create,
+    dual_entry,
+    events,
+    models3d,
+    sample_pack,
+    service,
+    style,
+    technical_flat,
+    workbench,
+)
+from .access_context import project_binding, request_project_id, validate_transaction_access
+from .managed_store import ManagedAction, ManagedAudit, action_key
 from .providers import Provider
 from .schemas import (
     ChatIn,
@@ -24,7 +43,213 @@ from .schemas import (
     StylePlanEdit,
     TaskIn,
 )
-from .store import AgentError, Record, create, head, records, require, serialize, transaction
+from .store import (
+    AgentError,
+    Record,
+    bind_transaction,
+    create,
+    head,
+    records,
+    require,
+    reset_transaction,
+    serialize,
+    transaction,
+)
+
+
+class EngineAction:
+    """One DB commit owns the engine result, action snapshot and task revision."""
+
+    def __init__(self, request: Request, raw: bytes):
+        self.request, self.raw = request, raw
+        query = request.scope.get("query_string", b"").decode("ascii")
+        self.target = request.url.path + ("?" + query if query else "")
+        self.action_id = request.headers.get("x-design-action-id", "")
+        self.context = request.headers.get("x-design-context", "")
+        revision = request.headers.get("x-design-revision", "")
+        self.creating = (
+            request.url.path in {"/api/design-projects", "/api/design-projects/direct"} and request.method == "POST"
+        )
+        self.archiving = request.method == "POST" and bool(
+            re.fullmatch(r"/api/design-projects/\d+/archive/?", request.url.path)
+        )
+        self.project_edit = bool(re.fullmatch(r"/api/design-projects/\d+(?:/archive)?/?", request.url.path))
+        self.layout = request.method == "PUT" and bool(
+            re.fullmatch(r"/api/project/\d+/design-canvas/?", request.url.path)
+        )
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", self.action_id):
+            raise AgentError("INVALID_INPUT", "请提供稳定的操作编号", 422)
+        if self.project_edit:
+            try:
+                schema = direct_create.ArchiveIn if self.archiving else direct_create.RenameIn
+                revision = str(schema.model_validate_json(raw).expected_revision)
+            except ValueError:
+                raise AgentError("INVALID_INPUT", "请检查项目操作字段和修订号", 422) from None
+        if not self.creating and not self.layout and not re.fullmatch(r"[1-9][0-9]{0,9}", revision):
+            raise AgentError("INVALID_INPUT", "请提供当前任务修订号", 422)
+        if self.layout:
+            try:
+                self.base_revision = workbench.CanvasIn.model_validate_json(raw).expected_layout_revision
+            except ValueError:
+                raise AgentError("INVALID_INPUT", "请检查画布布局字段、节点与数值范围", 422) from None
+        else:
+            self.base_revision = 0 if self.creating else int(revision)
+        self.base_key = "base_layout_revision" if self.layout else "base_revision"
+        self.db = None
+
+    def prepare(self):
+        self.db = db = session()
+        if db.bind.dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        self.user = validate_transaction_access(db, require_editable=False, allow_archived=self.archiving)
+        if self.user is None:
+            raise AgentError("LOGIN_REQUIRED", "请先登录设计工作台", 401)
+        pid = request_project_id(db)
+        if pid is None and not self.creating:
+            raise AgentError("NOT_FOUND", "此接口不支持设计工作区操作", 404)
+        if not self.creating:
+            self.row, self.meta = project_binding(db, pid, self.user, allow_archived=self.archiving)
+        self.key = action_key(get_config().design_scope_id, self.user.username, self.action_id)
+        prior = db.get(ManagedAction, self.key)
+        if prior:
+            if self.creating:
+                project_binding(db, prior.response["project_id"], self.user)
+            if prior.auth_context_id != self.context:
+                raise AgentError("AUTH_CONTEXT_CHANGED", "原操作属于另一登录会话；可只读查看原结果", 409)
+            if (
+                prior.method != self.request.method
+                or prior.path != self.target
+                or prior.raw_body != self.raw
+                or prior.response.get(self.base_key) != self.base_revision
+            ):
+                raise AgentError("IDEMPOTENCY_CONFLICT", "同一操作编号不能用于不同请求或基准修订", 409)
+            validate_transaction_access(db, require_editable=False, allow_archived=self.archiving)
+            headers = {} if self.layout else {"X-Design-Revision": str(prior.response["revision"])}
+            return JSONResponse(
+                prior.response,
+                status_code=prior.status_code,
+                headers=headers,
+            )
+        if self.creating:
+            if self.user.role != "designer":
+                raise AgentError("ROLE_FORBIDDEN", "仅设计员工可创建本人自主项目", 403)
+            return None
+        project_binding(db, pid, self.user, write=True)
+        if self.layout:
+            if workbench.canvas_document(db, pid)["layout_revision"] != self.base_revision:
+                raise AgentError("LAYOUT_CONFLICT", "画布已有新布局，请保留本地布局并重新核对", 409)
+            return None
+        if self.meta.revision != self.base_revision:
+            raise AgentError("STATE_CONFLICT", "任务已有新修订，请保留草稿并重新核对", 409)
+        if re.fullmatch(r"/api/design-versions/[^/]+/technical-flat/?", self.request.url.path) or re.fullmatch(
+            r"/api/technical-flats/[^/]+/revise/?",
+            self.request.url.path,
+        ):
+            raise AgentError("CAPABILITY_UNAVAILABLE", "此实例未启用同步技术图生成，请保留已保存设计", 503)
+        return None
+
+    def finish(self, response):
+        if not 200 <= response.status_code < 300:
+            return response
+        try:
+            result = json.loads(response.body)
+        except (ValueError, AttributeError) as error:
+            raise AgentError("INTERNAL_ERROR", "设计操作没有产生可恢复结果", 500) from error
+        if not isinstance(result, dict):
+            raise AgentError("INTERNAL_ERROR", "设计操作没有产生可恢复结果", 500)
+        db = self.db
+        validate_transaction_access(db)
+        if self.creating:
+            self.row, self.meta = project_binding(db, result["project_id"], self.user, write=True)
+        if self.layout:
+            if result.get("layout_revision") != self.base_revision + 1:
+                raise AgentError("INTERNAL_ERROR", "画布操作没有产生独立修订", 500)
+            result.update(action_id=self.action_id, base_layout_revision=self.base_revision, revision_domain="layout")
+            revision = result["layout_revision"]
+        else:
+            if self.meta.revision != self.base_revision:
+                raise AgentError("STATE_CONFLICT", "任务已有新修订，请重新核对", 409)
+            self.meta.revision += 1
+            result.update(action_id=self.action_id, base_revision=self.base_revision, revision=self.meta.revision)
+            revision = self.meta.revision
+        db.add(
+            ManagedAudit(
+                handoff_id=self.row.id,
+                revision=revision,
+                kind="layout_mutation" if self.layout else "engine_mutation",
+                actor=self.user.username,
+                payload={
+                    "action_id": self.action_id,
+                    "method": self.request.method,
+                    "path": self.target,
+                    self.base_key: self.base_revision,
+                    "result_id": result.get("id"),
+                    "revision_domain": "layout" if self.layout else "business",
+                },
+            )
+        )
+        db.add(
+            ManagedAction(
+                action_key=self.key,
+                action_id=self.action_id,
+                username=self.user.username,
+                auth_context_id=self.context,
+                method=self.request.method,
+                path=self.target,
+                raw_body=self.raw,
+                status_code=response.status_code,
+                response=result,
+                handoff_id=self.row.id,
+            )
+        )
+        db.flush()
+        validate_transaction_access(db)
+        if self.archiving:
+            self.meta.status = "archived"
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        if self.layout:
+            headers.pop("x-design-revision", None)
+        else:
+            headers["X-Design-Revision"] = str(self.meta.revision)
+        frozen = JSONResponse(result, status_code=response.status_code, headers=headers)
+        db.commit()
+        return frozen
+
+    def close(self):
+        if self.db is not None:
+            self.db.rollback()
+            self.db.close()
+
+
+async def engine_action(request: Request, original):
+    limit = assets.MAX_BYTES if re.fullmatch(r"/api/project/\d+/design-assets/?", request.url.path) else 256 * 1024
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise AgentError("INVALID_INPUT", "请求体超过允许大小", 413)
+    raw = bytes(body)
+
+    async def receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    cached = Request(request.scope, receive=receive)
+    await cached.body()  # The original parser/upload stream consumes the exact bounded bytes.
+    operation, token = EngineAction(cached, raw), None
+    try:
+        replay = await anyio.to_thread.run_sync(operation.prepare)
+        if replay is not None:
+            return replay
+        token = bind_transaction(operation.db)
+        response = await original(cached)
+        return await anyio.to_thread.run_sync(operation.finish, response)
+    finally:
+        if token is not None:
+            reset_transaction(token)
+        # Wait for the DB worker even if the client disconnects during dispatch.
+        with anyio.CancelScope(shield=True):
+            await anyio.to_thread.run_sync(operation.close)
 
 
 class AgentRoute(APIRoute):
@@ -33,18 +258,34 @@ class AgentRoute(APIRoute):
 
         async def handler(request):
             try:
+                if get_config().managed and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                    return await engine_action(request, original)
                 return await original(request)
             except AgentError as exc:
-                return JSONResponse(
-                    status_code=exc.status, content={"error": {"code": exc.code, "message": exc.message}}
-                )
+                error = {"code": exc.code, "message": exc.message}
+                payload = {"error": error}
+                if get_config().managed:
+                    error["retryable"] = exc.status in {429, 502, 503, 504}
+                    payload["request_id"] = uuid.uuid4().hex
+                return JSONResponse(status_code=exc.status, content=payload)
             except RequestValidationError:
+                error = {"code": "INVALID_INPUT", "message": "请检查必填内容、长度、约束编号与素材用途"}
+                payload = {"error": error}
+                if get_config().managed:
+                    error["retryable"] = False
+                    payload["request_id"] = uuid.uuid4().hex
                 return JSONResponse(
                     status_code=422,
-                    content={"error": {"code": "INVALID_INPUT", "message": "请检查必填内容、长度、约束编号与素材用途"}},
+                    content=payload,
                 )
 
-        return handler
+        async def private_handler(request):
+            response = await handler(request)
+            if re.fullmatch(r"/api/project/\d+/design-(canvas|messages|briefs|prompts)/?", request.url.path):
+                response.headers["Cache-Control"] = "private, no-store"
+            return response
+
+        return private_handler
 
 
 router = APIRouter(prefix="/api", tags=["design-agent"], route_class=AgentRoute)
@@ -66,13 +307,32 @@ def cms_response(pid: int, data: cms.CmsResponseIn) -> dict:
 
 
 @router.get("/design-agent/capabilities")
-def capabilities() -> dict:
-    return {**Provider().capabilities(), "three_d": models3d.capabilities()}
+def capabilities(project_id: int | None = None) -> dict:
+    with transaction() as db:
+        user = validate_transaction_access(db)
+        image_only = dual_entry.image_capability(db, project_id, user) if get_config().managed else None
+        direct = direct_create.capabilities(db, project_id, user, Provider()) if get_config().managed else None
+    return {
+        **Provider().capabilities(),
+        "three_d": models3d.capabilities(),
+        "image_only_execution": image_only,
+        "direct_creation": direct,
+    }
 
 
 @router.get("/design-projects")
-def projects(request: Request) -> dict:
+def projects(
+    request: Request,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> dict:
     with transaction() as db:
+        cfg = get_config()
+        if cfg.managed:
+            user = validate_transaction_access(db)
+            if user is None:
+                raise AgentError("LOGIN_REQUIRED", "请先登录设计工作台", 401)
+            return dual_entry.list_projects(db, user, offset, limit)
         rows = db.scalars(select(Record).where(Record.kind == "head").order_by(Record.created_at.desc()))
         user = getattr(request.state, "design_user", None)
         if get_config().design_auth_required and user:
@@ -94,7 +354,78 @@ def projects(request: Request) -> dict:
 
 @router.get("/project/{pid}/design-workspace")
 def workspace(pid: int) -> dict:
-    return service.workspace(pid)
+    return events.workspace_snapshot(pid)
+
+
+@router.post("/design-projects", status_code=201)
+def independent_project(data: dual_entry.ProjectIn) -> dict:
+    if not get_config().managed:
+        raise AgentError("CAPABILITY_UNAVAILABLE", "此入口需要独立人员会话", 503)
+    with transaction() as db:
+        return dual_entry.create_project(db, data)
+
+
+@router.post("/design-projects/direct", status_code=201)
+def direct_project(data: direct_create.DirectIn, request: Request) -> dict:
+    if not get_config().managed:
+        raise AgentError("CAPABILITY_UNAVAILABLE", "直接创作需要独立人员会话", 503)
+    with transaction() as db:
+        return direct_create.create_project(
+            db, data, request.headers.get("x-design-action-id"), request.headers.get("x-design-context")
+        )
+
+
+@router.patch("/design-projects/{pid}")
+def rename_project(pid: int, data: direct_create.RenameIn) -> dict:
+    with transaction() as db:
+        return direct_create.rename(db, pid, data)
+
+
+@router.post("/design-projects/{pid}/archive")
+def archive_project(pid: int, data: direct_create.ArchiveIn, request: Request) -> dict:
+    with transaction() as db:
+        return direct_create.archive(db, pid, data, request.headers.get("x-design-action-id"))
+
+
+@router.get("/design-creation-runs/{id}")
+def creation_run(id: str) -> dict:
+    with transaction() as db:
+        return direct_create.projection(require(db, id, "creation_run"))
+
+
+@router.post("/project/{pid}/design-prompts", status_code=201)
+def design_prompt(pid: int, data: dual_entry.PromptIn) -> dict:
+    with transaction() as db:
+        prompt = dual_entry.save_prompt(db, pid, data)
+        return {"prompt": prompt, "spec_id": head(db, pid).payload["spec_id"], "source_brief_id": data.candidate_id}
+
+
+@router.get("/project/{pid}/design-canvas")
+def design_canvas(pid: int) -> dict:
+    with transaction() as db:
+        user = validate_transaction_access(db)
+        if user is None:
+            raise AgentError("LOGIN_REQUIRED", "请先登录设计工作台", 401)
+        project_binding(db, pid, user)
+        return workbench.canvas_document(db, pid)
+
+
+@router.put("/project/{pid}/design-canvas")
+def update_design_canvas(pid: int, data: workbench.CanvasIn) -> dict:
+    with transaction() as db:
+        return workbench.save_canvas(db, pid, data)
+
+
+@router.post("/project/{pid}/design-briefs", status_code=201)
+def design_brief(pid: int, data: workbench.BriefIn) -> dict:
+    with transaction() as db:
+        return {"brief": workbench.save_brief(db, pid, data)}
+
+
+@router.post("/project/{pid}/design-text-to-image", status_code=202)
+def image_only_task(pid: int, data: dual_entry.ImageIn, request: Request) -> dict:
+    with transaction() as db:
+        return dual_entry.queue_image(db, pid, data, request.headers.get("x-design-action-id"))
 
 
 @router.post("/project/{pid}/design-assets", status_code=201)
@@ -245,7 +576,11 @@ def technical_flat_svg(id: str):
 def version_image(id: str):
     with transaction() as db:
         row = require(db, id, "version")
-        return FileResponse(assets.file_path(row.payload["image"]), media_type="image/png")
+        return FileResponse(
+            assets.file_path(row.payload["image"]),
+            media_type=row.payload["image"].get("mime_type", "image/png"),
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
 
 @router.post("/design-versions/{id}/model3d", status_code=202)
@@ -402,13 +737,15 @@ def correct_check(id: str, data: CorrectionIn) -> dict:
 
 
 @router.post("/project/{pid}/design-messages", status_code=201)
-def send_message(pid: int, data: ChatIn) -> dict:
+def send_message(pid: int, data: ChatIn, request: Request) -> dict:
+    if get_config().managed and data.idempotency_key != request.headers.get("x-design-action-id"):
+        raise AgentError("INVALID_INPUT", "消息编号须与动作编号一致", 422)
     return chat.send(pid, data)
 
 
 @router.get("/project/{pid}/design-events")
 async def design_events(pid: int, request: Request):
-    service.workspace(pid)
+    events.workspace_snapshot(pid)
     return StreamingResponse(
         events.stream(pid, request),
         media_type="text/event-stream",

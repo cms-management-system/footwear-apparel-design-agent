@@ -1,0 +1,6 @@
+.frame { min-height: 100dvh; }
+.banner { height: 36px; margin-left: 64px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 20px; border-bottom: 1px solid #e9e4f2; background: #faf8ff; color: #514969; font-size: 12px; }
+.banner a { color: #5433eb; text-decoration: none; }
+.banner a:focus-visible { outline: 2px solid #5433eb; outline-offset: 3px; }
+.frame main[data-tab] { height: calc(100dvh - 36px); }
+@media(max-width:600px) { .banner { margin-left: 0; padding: 0 12px; gap: 6px; font-size: 11px; } .frame main[data-tab] { height: calc(100dvh - 112px); } }

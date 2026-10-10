@@ -1,2 +1,2 @@
-import DesignAgentPanel from "@/components/design/DesignAgentPanel";
-export default function RequirementsPage() { return <DesignAgentPanel />; }
+import { redirect } from "next/navigation";
+export default function RequirementsPage() { redirect("/handoffs"); }

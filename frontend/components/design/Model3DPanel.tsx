@@ -1,5 +1,6 @@
 "use client";
 
+import { designContextKey } from "@/lib/team-api";
 import { useEffect, useRef, useState } from "react";
 import { agentApi, type Capabilities, type Model3D, type Version } from "@/lib/agent-api";
 import styles from "./design.module.css";
@@ -40,20 +41,23 @@ function RotatingModel({ src, poster, title }: { src: string; poster: string; ti
   </div>;
 }
 
-export default function Model3DPanel({ version, title, model, caps }: {
-  version: Version; title: string; model?: Model3D; caps: Capabilities | null;
-}) {
+type ModelPanelProps = { version: Version; title: string; model?: Model3D; caps: Capabilities | null; readOnly?: boolean };
+export default function Model3DPanel(props: ModelPanelProps) {
+  return <VersionModelPanel key={`${props.version.id}:${!!props.readOnly}`} {...props} />;
+}
+function VersionModelPanel({ version, title, model, caps, readOnly = false }: ModelPanelProps) {
   const [view, setView] = useState<"image" | "model">("image");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [imageFailed, setImageFailed] = useState(false);
   const image = agentApi.image(version.id, "version");
   const ready = model?.status === "succeeded";
   const inProgress = !!model && ["queued", "submitting", "running", "saving"].includes(model.status);
   async function generate() {
-    if (submitting || model || !caps?.three_d?.enabled) return;
+    if (readOnly || submitting || model || !caps?.three_d?.enabled) return;
     setSubmitting(true); setError("");
     try {
-      const storage = `model3d-request:${version.id}`;
+      const storage = `${designContextKey()}:model3d-request:${version.id}`;
       let key = sessionStorage.getItem(storage);
       if (!key) { key = crypto.randomUUID(); sessionStorage.setItem(storage, key); }
       await agentApi.generate3D(version.id, key);
@@ -68,13 +72,14 @@ export default function Model3DPanel({ version, title, model, caps }: {
       <button type="button" aria-pressed={view === "model"} onClick={() => setView("model")}>旋转查看 3D</button>
     </div>}
     {view === "model" && ready ? <RotatingModel src={agentApi.model3D(model.id)} poster={image} title={title} />
-      : <a href={image} target="_blank" rel="noreferrer"><img className={styles.chatDesign} src={image} alt={title} /></a>}
+      : <><a href={image} target="_blank" rel="noreferrer"><img className={styles.chatDesign} src={image} alt={title} width={768} height={1024} hidden={imageFailed} onError={() => setImageFailed(true)} /></a>{imageFailed && <div className={styles.chatDesign}><p role="alert">图片暂时无法加载，访问权限或连接可能已变化。</p><button type="button" onClick={() => setImageFailed(false)}>重新加载图片</button></div>}</>}
     {!model && (caps?.three_d?.enabled ? <div className={styles.modelInvitation}>
-      <button type="button" disabled={submitting || version.status === "candidate"} onClick={() => void generate()}>
+      <button type="button" disabled={readOnly || submitting || version.status === "candidate"} onClick={() => void generate()}>
         {submitting ? "正在提交 3D 任务…" : `制作这款的 3D 预览 · 预计 ¥${((caps?.three_d?.estimated_cost_fen ?? 180) / 100).toFixed(2)}`}
       </button>
       <p className={styles.muted}>仅发送这款效果图至火山方舟影眸；点击即提交一次付费生成。3D 是概念预览，需人工检查背面和结构。</p>
     </div> : null)}
+    {!caps?.three_d?.enabled && <p className={styles.muted}>3D 服务未启用，当前不可生成新的 3D 预览。已有授权结果可查看；它不表示真实试穿或尺码效果。</p>}
     {inProgress && <p role="status" className={styles.modelProgress}>{model.status === "saving" ? "模型已生成，正在保存到本地…" : "正在为这款生成真正的 3D 模型；完成后可在这里旋转查看。"}</p>}
     {model?.status === "interrupted" && <p role="alert" className={styles.error}>提交结果不确定，已停止自动重试，避免重复计费。请核对方舟任务记录。</p>}
     {["failed", "failed_before_submit"].includes(model?.status ?? "") && <p role="alert" className={styles.error}>{model?.error?.message ?? "3D 生成失败；原效果图仍保留。"}</p>}

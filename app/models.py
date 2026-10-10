@@ -48,6 +48,25 @@ class DesignerSession(Base):
     expires_at: Mapped[int] = mapped_column(Integer)
 
 
+class DesignDemoChain(Base):
+    __tablename__ = "design_demo_chain"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(160))
+    instance_id: Mapped[str] = mapped_column(String(160))
+    purpose: Mapped[str] = mapped_column(String(20))
+    payload: Mapped[dict] = mapped_column(JSON)
+    selected_role: Mapped[str] = mapped_column(String(20))
+    active: Mapped[bool] = mapped_column(default=True)
+
+
+class DesignDemoSession(Base):
+    __tablename__ = "design_demo_session"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chain_id: Mapped[str] = mapped_column(ForeignKey("design_demo_chain.id"))
+    role: Mapped[str] = mapped_column(String(20))
+    subject: Mapped[str] = mapped_column(String(80))
+
+
 class DesignProjectAccess(Base):
     __tablename__ = "design_project_access"
     project_id: Mapped[int] = mapped_column(Integer, primary_key=True)

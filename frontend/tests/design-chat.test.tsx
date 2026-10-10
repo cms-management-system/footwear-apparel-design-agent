@@ -264,11 +264,13 @@ it("风格规划默认可读，保存选择并确认后才提交对应款数", a
   vi.mocked(agentApi.workspace).mockResolvedValue(revised);
   fireEvent.click(screen.getByRole("button", { name: "保存方向调整" }));
   await waitFor(() => expect(agentApi.reviseStylePlan).toHaveBeenCalledWith("p1", expect.arrayContaining([expect.objectContaining({ id: direction(3).id, selected: false })])));
-  await screen.findByRole("button", { name: "确认这 2 个方向" });
+  // The button already exists while saving; wait for the saved version to be actionable.
+  await waitFor(() => expect((screen.getByRole("button", { name: "确认这 2 个方向" }) as HTMLButtonElement).disabled).toBe(false));
   const confirmed = { ...revised, style_plans: [{ ...revised.style_plans[0], status: "confirmed" as const }] };
   vi.mocked(agentApi.workspace).mockResolvedValue(confirmed);
   fireEvent.click(screen.getByRole("button", { name: "确认这 2 个方向" }));
-  await screen.findByRole("button", { name: "生成 2 款" });
+  await waitFor(() => expect(agentApi.confirmStylePlan).toHaveBeenCalledWith("p2"));
+  await waitFor(() => expect((screen.getByRole("button", { name: "生成 2 款" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "生成 2 款" }));
   await waitFor(() => expect(agentApi.submit).toHaveBeenCalledWith(1, "s1", "design", expect.any(String), 2, { id: "p2", directionIds: [direction(1).id, direction(2).id] }));
 });
@@ -319,6 +321,8 @@ it("方向已规划后收起重复的需求按钮，仍可从顶部修改原始�
 });
 
 it("两款只完成一款时在方案旁显示中断和继续入口，后续聊天不掩盖进度", async () => {
+  // This fixture exercises an enabled provider; disabled-provider protection is covered in workspace-series.
+  vi.mocked(agentApi.capabilities).mockResolvedValue({ understand: true, design: true, vision_service: "合成测试服务", image_service: "合成测试服务", quality_status: "待验", note: "", monthly_allocation_fen: 2000 });
   const state = data();
   state.tasks = [
     { ...task(), id: "design-task", mode: "design", status: "interrupted", design_count: 2, direction_version_ids: ["v1"], steps: [{ id: "step-2", tool: "generate_design", status: "unknown" }] },

@@ -5,6 +5,7 @@ import time
 
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.orm import object_session
 
 from . import assets, style
 from . import review as image_review
@@ -18,6 +19,7 @@ from .store import (
     WorkerLease,
     change,
     create,
+    fingerprint,
     head,
     now,
     records,
@@ -28,7 +30,11 @@ from .store import (
 
 
 def sources(db, task):
-    spec = require(db, task.payload["spec_id"], "spec", task.project_id).payload["spec"]
+    stored_spec = require(db, task.payload["spec_id"], "spec", task.project_id)
+    spec = dict(stored_spec.payload["spec"])
+    if "product_source" in stored_spec.payload:
+        spec["product_source"] = stored_spec.payload["product_source"]
+        spec["execution_changes"] = stored_spec.payload["execution_changes"]
     images = [
         (
             f"asset_id={r['asset_id']}; role={r['role']}; region={r['region']}; {r['instruction']}",
@@ -39,6 +45,19 @@ def sources(db, task):
     if spec["base_version_id"]:
         base = require(db, spec["base_version_id"], "version", task.project_id)
         images.insert(0, (f"base_version_id={base.id}; 修改底图", base.payload["image"]))
+    if task.payload.get("mode") == "understand":
+        context = task.payload.get("selected_context")
+        if context:
+            from .workbench import asset_payload
+
+            image = asset_payload(db, task.project_id, context["asset_id"])
+            if not any(payload.get("file") == image.get("file") for _, payload in images):
+                images.append(
+                    (
+                        f"asset_id={context['asset_id']}; selected_version_id={context['version_id']}; 明确讨论上下文",
+                        image,
+                    )
+                )
     return spec, images
 
 
@@ -64,6 +83,8 @@ def revision_direction(direction, spec):
 
 
 def event(db, task, tool, provider):
+    from ..config import get_config
+
     p = task.payload
     if task.status != "running":
         raise AgentError("STOPPED", "任务已停止")
@@ -85,11 +106,10 @@ def event(db, task, tool, provider):
     # ceilings ended ordinary design discussions after a handful of replies.
     # Keep journaling each provider call, but apply these ceilings only to the
     # separately requested image-generation task.
-    if p["mode"] in {"design", "style"} and p[field] >= p[cap]:
+    bounded = get_config().managed or p["mode"] in {"design", "style"}
+    if bounded and p[field] >= p[cap]:
         raise AgentError("CALL_LIMIT_EXHAUSTED", "本轮调用次数已用完；已有图片和检查结果保留")
-    if p["mode"] in {"design", "style"} and (
-        p.get("max_cost_fen") is not None and p["reserved_cost_fen"] + cost > p["max_cost_fen"]
-    ):
+    if bounded and (p.get("max_cost_fen") is not None and p["reserved_cost_fen"] + cost > p["max_cost_fen"]):
         raise AgentError("BUDGET_EXHAUSTED", "本轮设置的费用上限已用完；已有图片和检查结果保留")
     step = {
         "id": uid(),
@@ -99,11 +119,24 @@ def event(db, task, tool, provider):
         "started_at": now(),
         "prompt_version": "v1",
     }
+    if get_config().managed:
+        from .execution_quota import acquire_slot
+        from .interactive_policy import guard_legacy
+
+        guard_legacy(db, actor=p.get("actor"), context=p.get("auth_context_id"), worker=True)
+        acquire_slot(db, step["id"])
     change(task, **{field: p[field] + 1}, reserved_cost_fen=p["reserved_cost_fen"] + cost, steps=[*p["steps"], step])
     return step["id"]
 
 
 def finish_event(task, step_id, result, receipt=None):
+    from .managed_store import ProviderSlot
+
+    db = object_session(task)
+    if db:
+        slot = db.get(ProviderSlot, 1)
+        if slot and slot.attempt_id == step_id:
+            slot.status = "idle"
     steps = [
         {**s, "status": "done", "finished_at": now(), "result": result, "receipt": receipt or {}}
         if s["id"] == step_id
@@ -116,6 +149,11 @@ def finish_event(task, step_id, result, receipt=None):
 def fail_task(id, error):
     with transaction() as db:
         task = require(db, id, "task")
+        from .managed_store import ProviderSlot
+
+        slot = db.get(ProviderSlot, 1)
+        if slot and any(s.get("id") == slot.attempt_id for s in task.payload.get("steps", [])):
+            slot.status = "unknown" if error.code == "CALL_OUTCOME_UNKNOWN" else "idle"
         steps = [
             {
                 **s,
@@ -134,7 +172,14 @@ def fail_task(id, error):
         )
         if task.status != "cancelled":
             task.status = status
-        change(task, steps=steps, error={"code": error.code, "message": error.message}, outcome=error.message)
+        change(
+            task,
+            steps=steps,
+            error={"code": error.code, "message": error.message},
+            outcome="unknown"
+            if task.payload.get("mode") == "image_only" and error.code == "CALL_OUTCOME_UNKNOWN"
+            else error.message,
+        )
 
 
 def one_step(id, provider, owner=None):
@@ -146,6 +191,20 @@ def one_step(id, provider, owner=None):
                 raise AgentError("LEASE_LOST", "执行权已变更，已停止后续调用")
         if task.status != "running":
             return False
+        from ..config import get_config
+
+        if get_config().managed and task.payload.get("mode") == "understand":
+            from ..models import DesignerUser
+            from .access_context import project_binding
+            from .workbench import conversation_grant
+
+            actor = db.get(DesignerUser, task.payload.get("actor"))
+            if not actor or not actor.active or actor.role != "designer":
+                raise AgentError("AUTHORIZATION_REQUIRED", "原对话主体已失效，未调用供应商", 409)
+            project_binding(db, task.project_id, actor, write=True)
+            grant = conversation_grant(task.project_id, actor.username)
+            if not grant or task.payload.get("conversation_authorization") != grant:
+                raise AgentError("AUTHORIZATION_REQUIRED", "当前没有原对话文字授权，未调用供应商", 409)
         spec, images = sources(db, task)
         payload = task.payload
         action = payload.get("pending_action")
@@ -266,7 +325,26 @@ def one_step(id, provider, owner=None):
                 proposed.expected_spec_id = payload["spec_id"]
                 proposed.base_version_id = spec["base_version_id"]
                 proposed.edit_region = spec["edit_region"]
-                proposal = save_spec(db, task.project_id, proposed, check_idle=False)
+                if get_config().managed:
+                    from .workbench import model_candidate
+
+                    brief = model_candidate(db, task, proposed)
+                    proposal = create(
+                        db,
+                        task.project_id,
+                        "spec",
+                        {
+                            "spec": proposed.model_dump(exclude={"expected_spec_id"}),
+                            "fingerprint": fingerprint(proposed.model_dump()),
+                            "parent_spec_id": payload["spec_id"],
+                            "execution_candidate_only": True,
+                            "brief_id": brief["id"],
+                        },
+                        "candidate",
+                    )
+                    change(task, brief_id=brief["id"])
+                else:
+                    proposal = save_spec(db, task.project_id, proposed, check_idle=False)
                 task.status = "awaiting_review"
                 change(task, proposed_spec_id=proposal.id, outcome="要求单已整理，请设计师核对并确认")
             else:
@@ -286,6 +364,11 @@ def one_step(id, provider, owner=None):
                     "text": text,
                     "task_id": id,
                     "spec_id": task.payload.get("proposed_spec_id") if tool == "propose_spec" else None,
+                    **(
+                        {"brief_id": task.payload.get("brief_id") if tool == "propose_spec" else None}
+                        if get_config().managed
+                        else {}
+                    ),
                 },
                 "sent",
             )
@@ -318,9 +401,29 @@ def one_step(id, provider, owner=None):
             raise AgentError("IMAGE_REQUIRED", "没有可检查的候选图")
         context = {
             "mode": payload["mode"],
+            **(
+                {
+                    "selected_context": payload.get("selected_context"),
+                    "conversation_references": payload.get("conversation_references", []),
+                }
+                if get_config().managed
+                else {}
+            ),
             "schema_feedback": payload.get("schema_feedback", []),
             "conversation": [
-                {"role": m.payload["role"], "text": m.payload["text"]}
+                {
+                    "role": m.payload["role"],
+                    "text": m.payload["text"],
+                    **(
+                        {
+                            "selected_context": m.payload.get("selected_context"),
+                            "prompt_id": m.payload.get("prompt_id"),
+                            "spec_id": m.payload.get("spec_id"),
+                        }
+                        if get_config().managed
+                        else {}
+                    ),
+                }
                 for m in records(db, task.project_id, "message")[-16:]
                 if m.payload["role"] != "system"
             ],
@@ -331,7 +434,9 @@ def one_step(id, provider, owner=None):
             "current_version_id": payload["current_version_id"],
             "existing_designs": [
                 {
-                    "id": v.id, "spec_id": v.payload["spec_id"], "status": v.status,
+                    "id": v.id,
+                    "spec_id": v.payload["spec_id"],
+                    "status": v.status,
                     "has_image": bool(v.payload.get("image")),
                     "review_summary": (v.payload.get("review") or {}).get("summary"),
                     "task_error": require(
@@ -342,10 +447,7 @@ def one_step(id, provider, owner=None):
             ],
             "review": current.payload.get("review") if current else None,
             "remaining_image_calls": payload["max_image_calls"] - payload["image_calls"],
-            "remaining_reasoning_calls": (
-                None if payload["mode"] == "understand"
-                else payload["max_reasoning_calls"] - payload["reasoning_calls"]
-            ),
+            "remaining_reasoning_calls": (payload["max_reasoning_calls"] - payload["reasoning_calls"]),
         }
         if tool == "edit_design" and current:
             images.insert(0, (f"current_version_id={current.id}; 本轮修正底图", current.payload["image"]))
@@ -411,6 +513,8 @@ def one_step(id, provider, owner=None):
     elif tool == "inspect_assets":
         result = Inspection.model_validate(provider.inspect(spec, images)).model_dump()
         expected = {r["asset_id"] for r in spec["references"]}
+        if payload.get("mode") == "understand" and payload.get("selected_context"):
+            expected.add(payload["selected_context"]["asset_id"])
         actual = [r["asset_id"] for r in result["observations"]]
         if set(actual) != expected or len(actual) != len(expected):
             raise AgentError("INSPECTION_INVALID", "视觉结果未逐张对应原始素材")
@@ -599,6 +703,16 @@ def run_task(id, provider=None, owner=None):
     try:
         with transaction() as db:
             mode = require(db, id, "task").payload["mode"]
+        if mode == "direct_creation":
+            from .direct_create import run_text
+
+            run_text(id, provider, owner)
+            return
+        if mode == "image_only":
+            from .dual_entry import run_image_task
+
+            run_image_task(id, provider, owner)
+            return
         if mode == "style":
             run_style_task(id, provider, owner)
             return
@@ -608,6 +722,13 @@ def run_task(id, provider=None, owner=None):
                 return
         raise AgentError("STEP_LIMIT", "达到步骤上限，已停止本轮")
     except AgentError as exc:
+        with transaction() as db:
+            direct = bool(require(db, id, "task").payload.get("creation_run_id"))
+        if direct:
+            from .direct_create import finish_error
+
+            finish_error(id, exc, getattr(provider, "last_receipt", {}))
+            return
         fail_task(id, exc)
     except (ValidationError, ValueError):
         fail_task(id, AgentError("MODEL_SCHEMA_INVALID", "模型或图片结果不符合协议，任务已停止"))
@@ -635,6 +756,15 @@ def recover(db):
     from . import models3d
 
     models3d.recover(db)
+    from ..config import get_config
+
+    if get_config().managed:
+        from .direct_create import recover as recover_creation
+
+        recover_creation(db)
+        for flat in db.scalars(select(Record).where(Record.kind == "technical_flat", Record.status == "running")):
+            flat.status = "interrupted"
+            change(flat, error="服务重启；原技术图结果未知，未重新调用模型。")
     for task in db.scalars(select(Record).where(Record.kind == "task", Record.status == "running")):
         pending = any(s["status"] == "pending" for s in task.payload["steps"])
         task.status = "interrupted"

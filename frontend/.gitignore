@@ -1,0 +1,16 @@
+# This checkout's isolated local preview artifacts
+.next-partner-20261010/
+.next-partner-dev-20261010/
+
+.next-fullchain-20261010/
+
+.next-workspace-20261010/
+
+.next-direct-20261010/
+
+.next-direct-status-20261010/
+
+.next-demo-access-20261010/
+.env
+.env.*
+!.env.example

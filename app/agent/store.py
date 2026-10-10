@@ -4,12 +4,26 @@ import hashlib
 import json
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Integer, String, Text, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from ..models import Project, session
+
+_request_transaction: ContextVar[Session | None] = ContextVar("design_request_transaction", default=None)
+
+
+def bind_transaction(db: Session) -> Token:
+    """Borrow a single sequential unit of work across the route's worker calls."""
+    if _request_transaction.get() is not None:
+        raise RuntimeError("A request unit of work is already bound")
+    return _request_transaction.set(db)
+
+
+def reset_transaction(token: Token) -> None:
+    _request_transaction.reset(token)
 
 
 class AgentError(Exception):
@@ -60,11 +74,21 @@ class WorkerLease(AgentBase):
 
 @contextmanager
 def transaction():
+    from .access_context import validate_transaction_access
+
+    shared = _request_transaction.get()
+    if shared is not None:
+        validate_transaction_access(shared)
+        yield shared
+        validate_transaction_access(shared)
+        return
     with session() as db:
         try:
             if db.bind.dialect.name == "sqlite":
                 db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            validate_transaction_access(db)
             yield db
+            validate_transaction_access(db)
             db.commit()
         except Exception:
             db.rollback()
@@ -105,12 +129,15 @@ def change(row, **updates):
 
 
 def serialize(row):
+    payload = row.payload
+    if row.kind == "task":
+        payload = {k: v for k, v in payload.items() if k not in {"auth_context_id", "legacy_policy_sha256"}}
     return {
         "id": row.id,
         "project_id": row.project_id,
         "status": row.status,
         "created_at": row.created_at,
-        **row.payload,
+        **payload,
     }
 
 

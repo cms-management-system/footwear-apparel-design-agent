@@ -1,14 +1,12 @@
-import DesignChat from "@/components/design/DesignChat";
-import { cookies } from "next/headers";
+import Link from "next/link";
 import { redirect } from "next/navigation";
-
-export default async function Page() {
-  const token = (await cookies()).get("design_session")?.value;
-  if (!token) redirect("/login");
-  const backend = process.env.BACKEND_BASE_URL || "http://127.0.0.1:8020";
-  const response = await fetch(`${backend}/api/design-auth/me`, { headers: { Cookie: `design_session=${token}` }, cache: "no-store" });
-  if (!response.ok) redirect("/login");
-  const user = await response.json();
-  if (user.role === "manager") redirect("/handoffs");
-  return <DesignChat />;
+import CreationEntry from "@/components/workspace/CreationEntry";
+export default async function Page({ searchParams }: { searchParams: Promise<{ project?: string; handoff?: string }> }) {
+  const query = await searchParams;
+  if (query.project !== undefined) {
+    const id = Number(query.project);
+    if (!/^\d+$/.test(query.project) || !Number.isSafeInteger(id) || id < 1) return <main style={{ padding: 32 }}><h1>项目链接无效</h1><Link href="/projects">返回授权项目列表</Link></main>;
+    redirect(`/projects/${id}${query.handoff ? `?handoff=${encodeURIComponent(query.handoff)}` : ""}`);
+  }
+  return <CreationEntry />;
 }

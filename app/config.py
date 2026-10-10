@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,6 +43,43 @@ def _load_env() -> None:
 class Config:
     def __init__(self) -> None:
         _load_env()
+        self.design_integration_mode = os.environ.get("DESIGN_INTEGRATION_MODE", "legacy").strip().lower()
+        if self.design_integration_mode not in {"legacy", "managed"}:
+            raise ValueError("DESIGN_INTEGRATION_MODE must be legacy or managed")
+        self.managed = self.design_integration_mode == "managed"
+        self.design_instance_id = os.environ.get("DESIGN_INSTANCE_ID", "").strip()
+        self.design_scope_id = os.environ.get("DESIGN_SCOPE_ID", "").strip()
+        if self.managed and not all(
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}", value)
+            for value in (self.design_instance_id, self.design_scope_id)
+        ):
+            raise ValueError("Managed mode requires explicit DESIGN_INSTANCE_ID and DESIGN_SCOPE_ID")
+        origins = os.environ.get("DESIGN_ALLOWED_ORIGINS", "http://localhost:3092,http://127.0.0.1:3092")
+        self.design_allowed_origins = tuple(
+            dict.fromkeys(value.strip() for value in origins.split(",") if value.strip())
+        )
+        if self.managed:
+            for origin in self.design_allowed_origins:
+                parsed = urlsplit(origin)
+                if (parsed.scheme not in {"http", "https"} or not parsed.hostname or "*" in origin
+                        or parsed.username is not None or parsed.password is not None
+                        or parsed.path or parsed.query or parsed.fragment):
+                    raise ValueError("DESIGN_ALLOWED_ORIGINS must contain exact HTTP origins")
+                _ = parsed.port  # Reject invalid port syntax before serving requests.
+        default_cookie = (
+            "design_session_" + hashlib.sha256(self.design_instance_id.encode()).hexdigest()[:12]
+            if self.managed else "design_session"
+        )
+        self.design_session_cookie = os.environ.get("DESIGN_SESSION_COOKIE_NAME", default_cookie)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", self.design_session_cookie):
+            raise ValueError("Invalid DESIGN_SESSION_COOKIE_NAME")
+        self.design_session_cookie_secure = os.environ.get("DESIGN_SESSION_COOKIE_SECURE", "false").lower() == "true"
+        self.design_paid_providers_enabled = os.environ.get(
+            "DESIGN_PAID_PROVIDERS_ENABLED", "false" if self.managed else "true"
+        ).lower() == "true"
+        self.design_image_only_enabled = os.environ.get("DESIGN_IMAGE_ONLY_ENABLED", "false").lower() == "true"
+        self.design_image_authorization_file = os.environ.get("DESIGN_IMAGE_AUTHORIZATION_FILE", "")
+        self.design_conversation_authorization_file = os.environ.get("DESIGN_CONVERSATION_AUTHORIZATION_FILE", "")
         self.image_api_key = os.environ.get("IMAGE_API_KEY", "")
         self.image_base_url = os.environ.get("IMAGE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
         self.image_model = os.environ.get("IMAGE_MODEL", "")
@@ -53,13 +93,25 @@ class Config:
         self.product_handoff_url = os.environ.get("PRODUCT_HANDOFF_URL", "http://127.0.0.1:3112").rstrip("/")
         self.product_handoff_key = os.environ.get("PRODUCT_HANDOFF_KEY", "")
         self.design_public_base_url = os.environ.get("DESIGN_PUBLIC_BASE_URL", "http://127.0.0.1:8020").rstrip("/")
-        self.design_auth_required = os.environ.get("DESIGN_AUTH_REQUIRED", "false").lower() == "true"
+        self.design_auth_required = self.managed or os.environ.get("DESIGN_AUTH_REQUIRED", "false").lower() == "true"
         self.design_manager_username = os.environ.get("DESIGN_MANAGER_USERNAME", "")
         self.design_manager_password_hash = os.environ.get("DESIGN_MANAGER_PASSWORD_HASH", "")
+        self.design_demo_access_enabled = os.environ.get("DESIGN_DEMO_ACCESS_ENABLED", "false").lower() == "true"
+        self.design_demo_designer_username = os.environ.get("DESIGN_DEMO_DESIGNER_USERNAME", "design-employee-a")
+        self.design_demo_cookie = self.design_session_cookie + "_demo"
+        self.design_demo_chain_cookie = self.design_session_cookie + "_demo_chain"
+        if self.design_demo_access_enabled:
+            if not self.managed:
+                raise ValueError("Demo access requires managed mode")
+            for origin in self.design_allowed_origins:
+                host = urlsplit(origin).hostname
+                if host not in {"localhost", "127.0.0.1", "::1"} and not host.endswith(".localhost"):
+                    raise ValueError("Demo access requires exact loopback origins")
         self.assets_dir = Path(os.environ.get("ASSETS_DIR", "data/assets"))
         if not self.assets_dir.is_absolute():
             self.assets_dir = ROOT / self.assets_dir
         self.assets_dir.mkdir(parents=True, exist_ok=True)
+        self.design_demo_secret_file = self.assets_dir.parent / ".design-demo-secret"
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:

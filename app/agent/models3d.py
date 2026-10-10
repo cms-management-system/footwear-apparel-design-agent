@@ -44,7 +44,10 @@ def _allocation():
 
 
 def capabilities():
-    configured = bool(os.getenv("AGENT_3D_ENABLED") == "true" and _key() and _allocation() >= PRICE_FEN)
+    configured = bool(
+        get_config().design_paid_providers_enabled and os.getenv("AGENT_3D_ENABLED") == "true"
+        and _key() and _allocation() >= PRICE_FEN
+    )
     return {
         "enabled": configured,
         "model": MODEL if configured else None,
@@ -79,6 +82,8 @@ def _provider_image(payload):
 
 
 def _request(method, url, *, json_body=None):
+    if not get_config().design_paid_providers_enabled:
+        raise AgentError("CAPABILITY_UNAVAILABLE", "本实例尚未授权 3D 服务调用", 503)
     try:
         with httpx.Client(timeout=httpx.Timeout(45, connect=10), follow_redirects=False) as client:
             response = client.request(method, url, headers={"Authorization": f"Bearer {_key()}"}, json=json_body)
@@ -99,6 +104,8 @@ def _request(method, url, *, json_body=None):
 
 
 def submit(version_id: str, request: Generate3DIn):
+    if not get_config().design_paid_providers_enabled:
+        raise AgentError("CAPABILITY_UNAVAILABLE", "本实例尚未授权收费模型调用", 503)
     if not request.authorized:
         raise AgentError("3D_AUTH_REQUIRED", "请先确认这款图片会发送至火山方舟并可能产生费用", 422)
     if not capabilities()["enabled"]:
@@ -143,6 +150,8 @@ def for_project(db, pid):
 
 
 def _download_model(file_url: str) -> str:
+    if not get_config().design_paid_providers_enabled:
+        raise AgentError("CAPABILITY_UNAVAILABLE", "本实例尚未授权外部 3D 文件服务调用", 503)
     parts = urlparse(file_url)
     host = (parts.hostname or "").lower()
     if parts.scheme != "https" or parts.port not in {None, 443} or not any(
@@ -212,6 +221,8 @@ def model_path(row):
 
 def tick():
     """Process at most one state transition; create is never replayed after uncertainty."""
+    if not get_config().design_paid_providers_enabled:
+        return  # Preserve pending history without polling or downloading external resources.
     timestamp = datetime.now(UTC).timestamp()
     with transaction() as db:
         candidates = db.scalars(

@@ -30,7 +30,7 @@ export default function DesignStart({ caps, busy, onStart, onDirty, conversation
     }}>
       <fieldset disabled={busy} className={styles.startFields}>
         <label className={styles.intentLabel}>{conversation ? "发消息给设计助手" : "说说你要做什么样的衣服"}
-          <textarea rows={2} maxLength={4000} value={intent} onChange={e => { setIntent(e.target.value); changed(); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={e => {
+          <textarea aria-describedby="design-composer-help" rows={2} maxLength={4000} value={intent} onChange={e => { setIntent(e.target.value); changed(); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={e => {
             if (e.key !== "Enter" || e.shiftKey || composing.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
             e.preventDefault();
             submit();
@@ -51,7 +51,8 @@ export default function DesignStart({ caps, busy, onStart, onDirty, conversation
           <Preview file={asset.file} /><div><b>{asset.file.name}</b><label>图片用途<select value={asset.role} onChange={e => { setAssets(items => items.map(a => a.id === asset.id ? { ...a, role: e.target.value as Reference["role"] } : a)); changed(); }}>{Object.entries(roles).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>
             <button type="button" aria-label={`移除 ${asset.file.name}`} onClick={() => { setAssets(items => items.filter(a => a.id !== asset.id)); changed(); }}>移除图片</button>
           </div></div>)}</div>
-        {caps && !caps.understand && !waitingForReply && <p className={styles.muted}>视觉服务待开通，目前仅保存需求和素材。</p>}
+        <p id="design-composer-help" className={styles.muted}>Enter 发送，Shift + Enter 换行。建议描述想保留的部分和希望调整的细节。</p>
+        {caps && !caps.understand && !waitingForReply && <p className={styles.muted}>理解服务未启用，目前仅保存需求和素材，不会自动生成回复或图片。</p>}
         <div className={styles.actions}><button className={styles.primary} type="submit" disabled={busy || sendBlocked || !caps || !intent.trim()}>{busy ? "正在发送…" : conversation ? "发送" : "开始理解"}</button></div>
       </fieldset>
     </form>

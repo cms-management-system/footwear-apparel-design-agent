@@ -1,5 +1,6 @@
 from sqlalchemy import select
 
+from ..config import get_config
 from ..models import Project
 from .providers import Provider
 from .schemas import Constraint, SamplingSheetIn, SpecIn, TaskIn
@@ -28,7 +29,7 @@ def ensure_idle(db, pid):
         raise AgentError("TASK_ACTIVE", "请先完成或取消当前任务，再修改要求单")
 
 
-def save_spec(db, pid, data: SpecIn, check_idle=True):
+def save_spec(db, pid, data: SpecIn, check_idle=True, actor=None):
     if check_idle:
         ensure_idle(db, pid)
     h = head(db, pid)
@@ -39,8 +40,15 @@ def save_spec(db, pid, data: SpecIn, check_idle=True):
     if data.base_version_id:
         require(db, data.base_version_id, "version", pid)
     payload = data.model_dump(exclude={"expected_spec_id"})
+    from .managed_source import spec_context
+
+    managed = spec_context(db, pid, payload, data.expected_spec_id, actor)
+    basis = {**payload, "product_source": managed["product_source"]} if managed else payload
     row = create(
-        db, pid, "spec", {"spec": payload, "fingerprint": fingerprint(payload), "parent_spec_id": data.expected_spec_id}
+        db,
+        pid,
+        "spec",
+        {"spec": payload, "fingerprint": fingerprint(basis), "parent_spec_id": data.expected_spec_id, **managed},
     )
     old_version = h.payload.get("confirmed_version_id")
     # Editing one existing design is a draft branch. Keep the chosen image
@@ -74,6 +82,8 @@ def submit(pid, data: TaskIn, provider=None):
 
 
 def submit_in(db, pid, data, provider, review_version=None):
+    if get_config().managed and data.mode == "style":
+        raise AgentError("CAPABILITY_UNAVAILABLE", "本实例仅开放受控创作与已批准单图路径，不开放额外风格模型", 409)
     request_data = data.model_dump(exclude={"idempotency_key"})
     if review_version:
         request_data["review_version_id"] = review_version.id
@@ -89,6 +99,11 @@ def submit_in(db, pid, data, provider, review_version=None):
         if existing.payload["request_hash"] != request_hash:
             raise AgentError("IDEMPOTENCY_CONFLICT", "同一个请求编号不能用于不同任务")
         return serialize(existing)
+    trusted_execution = {}
+    if get_config().managed:
+        from .interactive_policy import legacy_submission
+
+        trusted_execution = legacy_submission(db)
     if data.mode == "design" and any(
         task.status == "interrupted"
         and task.payload.get("spec_id") == data.spec_id
@@ -135,6 +150,7 @@ def submit_in(db, pid, data, provider, review_version=None):
             **data.model_dump(exclude={"authorized", "idempotency_key"}),
             "request_hash": request_hash,
             "authorized_at": now(),
+            **trusted_execution,
             "source_fingerprint": s.payload["fingerprint"],
             "provider": info,
             "reasoning_calls": 0,
@@ -172,9 +188,11 @@ def recheck_version(id, data, provider=None):
         if not version.payload.get("image"):
             raise AgentError("IMAGE_REQUIRED", "尚无已保存图片可检查")
         result = submit_in(
-            db, version.project_id,
+            db,
+            version.project_id,
             TaskIn(spec_id=spec.id, mode="design", authorized=data.authorized, idempotency_key=key),
-            provider, review_version=version,
+            provider,
+            review_version=version,
         )
         task = require(db, result["id"], "task", version.project_id)
         original = require(db, version.payload["task_id"], "task", version.project_id)
@@ -186,6 +204,19 @@ def recheck_version(id, data, provider=None):
 def task_control(id, action, text=""):
     with transaction() as db:
         row = require(db, id, "task")
+        if row.payload.get("creation_run_id"):
+            from .execution_quota import release_unsent
+
+            run = require(db, row.payload["creation_run_id"], "creation_run")
+            if action != "cancel":
+                raise AgentError("UNKNOWN_CALL", "创作任务只读恢复；新输入需作为新意图发送", 409)
+            if row.status != "queued" or row.payload.get("steps"):
+                raise AgentError("PROJECT_BUSY", "只有明确尚未派发的本地阶段可以取消", 409)
+            release_unsent(db, run)
+            row.status = run.status = "cancelled"
+            change(run, stage="done", reason="CANCELLED_BEFORE_DISPATCH")
+            change(row, outcome="已取消尚未派发阶段，未调用供应商")
+            return serialize(row)
         if action == "cancel":
             if row.status in BUSY or row.status == "interrupted":
                 row.status = "cancelled"
@@ -196,11 +227,14 @@ def task_control(id, action, text=""):
             row.status = "queued"
             change(row, feedback=[*row.payload["feedback"], {"text": text, "at": now()}], questions=[])
         elif action == "resume":
+            if row.payload.get("mode") == "image_only":
+                raise AgentError("UNKNOWN_CALL", "单张授权任务只读恢复，禁止再次派发原调用", 409)
             if row.status != "interrupted":
                 raise AgentError("INVALID_STATE", "只有中断的任务可以恢复")
             uncertain = [s for s in row.payload["steps"] if s["status"] == "unknown"]
             if any(s["status"] == "pending" for s in row.payload["steps"]) or (
-                uncertain and (
+                uncertain
+                and (
                     row.payload["mode"] != "design"
                     or any(s["tool"] not in {"generate_design", "edit_design"} for s in uncertain)
                 )
@@ -291,6 +325,19 @@ def confirm_version(id):
         review = row.payload.get("review")
         if row.status == "confirmed":
             return serialize(row)
+        if row.payload.get("execution_mode") == "image_only":
+            from .access_context import validate_transaction_access
+
+            user = validate_transaction_access(db)
+            row.status = "confirmed"
+            change(
+                row,
+                confirmed_at=now(),
+                confirmation_origin="manual_selection",
+                selected_by=user.username if user else "test_actor",
+            )
+            change(h, confirmed_version_id=id)
+            return serialize(row)
         if not review:
             raise AgentError("REVIEW_REQUIRED", "该图片尚未完成实际视觉检查")
         if review["goal"]["status"] != "pass":
@@ -377,7 +424,8 @@ def auto_sampling_sheet(id: str):
                 continue
             check = next(
                 (
-                    c for c in review.get("checks", [])
+                    c
+                    for c in review.get("checks", [])
                     if c["constraint_id"] == constraint["id"] and c["status"] == "pass"
                 ),
                 None,

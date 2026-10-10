@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import secrets
 import hashlib
+import secrets
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from ..design_auth import CurrentDesigner, ManagerDesigner
 from ..config import get_config
+from ..design_auth import CurrentDesigner, ManagerDesigner
 from ..models import DesignerUser, DesignHandoff, DesignProjectAccess, Project, session
 from . import assets, service
 from .product_bridge import ProductBridge
@@ -37,7 +37,10 @@ def item(row: DesignHandoff) -> dict:
 
 
 @router.post("/design-handoffs/sync")
-def sync(_: ManagerDesigner):
+async def sync(request: Request, _: ManagerDesigner):
+    if get_config().managed:
+        from .managed_bridge import sync_packages
+        return await sync_packages(request, await request.body())
     packages = ProductBridge().list_approved()
     with session() as db:
         for package in packages:
@@ -59,7 +62,12 @@ def sync(_: ManagerDesigner):
 
 
 @router.get("/design-handoffs")
-def list_handoffs(user: CurrentDesigner):
+def list_handoffs(
+    request: Request, user: CurrentDesigner, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)
+):
+    if get_config().managed:
+        from . import managed_workflow
+        return managed_workflow.list_handoffs(request, offset, limit)
     with session() as db:
         query = select(DesignHandoff).order_by(DesignHandoff.created_at.desc())
         if user.role != "manager":
@@ -74,7 +82,10 @@ class Decision(BaseModel):
 
 
 @router.post("/design-handoffs/{handoff_id}/decision")
-def decide(handoff_id: str, data: Decision, _: ManagerDesigner):
+async def decide(handoff_id: str, data: Decision, request: Request, _: ManagerDesigner):
+    if get_config().managed:
+        from . import managed_workflow
+        return managed_workflow.decide(request, handoff_id, await request.body())
     with session() as db:
         row = db.get(DesignHandoff, handoff_id)
         if not row:
@@ -149,7 +160,10 @@ def decide(handoff_id: str, data: Decision, _: ManagerDesigner):
 
 
 @router.post("/design-handoffs/{handoff_id}/submit")
-def submit_design(handoff_id: str, user: CurrentDesigner):
+async def submit_design(handoff_id: str, request: Request, user: CurrentDesigner):
+    if get_config().managed:
+        from . import managed_workflow
+        return managed_workflow.submit(request, handoff_id, await request.body())
     if user.role != "designer":
         raise HTTPException(403, "仅设计人员可以提交方案")
     with session() as db:
@@ -180,7 +194,10 @@ class Review(BaseModel):
 
 
 @router.post("/design-handoffs/{handoff_id}/review")
-def review_design(handoff_id: str, data: Review, _: ManagerDesigner):
+async def review_design(handoff_id: str, data: Review, request: Request, _: ManagerDesigner):
+    if get_config().managed:
+        from . import managed_workflow
+        return managed_workflow.review(request, handoff_id, await request.body())
     with session() as db:
         row = db.get(DesignHandoff, handoff_id)
         if not row or row.status != "review" or row.project_id is None:
@@ -218,7 +235,10 @@ def review_design(handoff_id: str, data: Review, _: ManagerDesigner):
 
 
 @router.get("/design-public/{token}.png")
-def public_image(token: str):
+def public_image(token: str, request: Request):
+    if get_config().managed:
+        from .managed_bridge import private_legacy_image
+        return private_legacy_image(request, token)
     if len(token) < 30:
         raise HTTPException(404)
     with session() as db:
@@ -229,3 +249,21 @@ def public_image(token: str):
         if not version:
             raise HTTPException(404)
         return FileResponse(assets.file_path(version.payload["image"]), media_type="image/png")
+
+
+@router.get("/design-handoffs/{handoff_id}")
+def handoff_detail(handoff_id: str, request: Request, _: CurrentDesigner):
+    from . import managed_workflow
+    return managed_workflow.detail(request, handoff_id)
+
+
+@router.get("/design-operations/{action_id}")
+def operation_detail(action_id: str, request: Request, _: CurrentDesigner):
+    from . import managed_workflow
+    return managed_workflow.operation(request, action_id)
+
+
+@router.post("/design-handoffs/{handoff_id}/delivery")
+async def deliver_handoff(handoff_id: str, request: Request, _: ManagerDesigner):
+    from .managed_bridge import deliver
+    return await deliver(request, handoff_id, await request.body())

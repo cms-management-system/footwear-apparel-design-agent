@@ -19,6 +19,8 @@ data/assets/
 data/exports/
 *.log
 *.pid
+.design-demo-secret
+data/.design-demo-secret
 
 # Editor and OS files
 .DS_Store
